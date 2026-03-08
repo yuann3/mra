@@ -1,0 +1,724 @@
+#+TITLE: Tokio-native multi-agent swarm framework
+#+AUTHOR: Yuan
+#+DATE: 2026-02-28
+#+UPDATED: 2026-03-06
+#+STARTUP: overview
+
+* The idea
+
+A Rust framework for running dozens (or hundreds) of AI agents
+concurrently on a single Tokio runtime. Each agent is a lightweight
+actor with its own message queue, tools, and memory. Agents talk to each
+other through typed channels. The runtime handles backpressure,
+crash recovery, and distributed tracing without you thinking about it.
+
+Think Erlang/OTP supervision trees, but for LLM agents, written in Rust.
+
+* What already exists
+
+The Rust agent ecosystem grew fast in 2025-2026. Key frameworks worth
+knowing about:
+
+** Rig (0xPlaygrounds)
+
+The most mature Rust agent library. 6.2K GitHub stars, 266K+ downloads,
+153+ contributors. 20+ LLM providers behind a unified ~CompletionClient~
+trait. 10+ vector store integrations. Full GenAI Semantic Convention
+(OpenTelemetry) support. Full WASM compatibility (core library). Good
+for building individual agents, but has no multi-agent orchestration, no
+swarm patterns, no agent-to-agent communication.
+
+Now at v0.27+ with agentic workflows supporting multi-turn streaming.
+Used in production by St. Jude Children's Research Hospital, Coral
+Protocol, Neon (app.build), Nethermind, Dria, and 508+ dependent repos.
+
+** AutoAgents (LiquidOS)
+
+Production-grade with ~#[tool]~ derive macros and WASM-sandboxed tool
+execution. Benchmarked at 4.97 rps with 1,046 MB peak memory (vs 5,706
+MB for LangChain doing the same work). Multi-agent orchestration is
+still evolving. Benchmark suite also compares against CrewAI, PydanticAI,
+GraphBit, and LlamaIndex.
+
+** ADK-Rust (zavora-ai, community)
+
+NOT the official Google ADK (which has Python, JS, Go, Java — no Rust).
+This is a community project (v0.3.2) inspired by Google's ADK patterns.
+Very feature-rich: LlmAgent, SequentialAgent, ParallelAgent, LoopAgent,
+GraphAgent (LangGraph-style), realtime voice agents (OpenAI/Gemini),
+RAG pipeline with 6 vector store backends, browser automation (46
+WebDriver tools), guardrails (PII redaction, content filtering), visual
+Studio builder, A2A protocol, MCP integration, 120+ examples. 14+ LLM
+provider clients. Has its own eval framework.
+
+** Others worth a glance
+
+| Framework      | Distinguishing feature                                   |
+|----------------+----------------------------------------------------------|
+| Swarms-rs      | Enterprise focus, ~ConcurrentWorkflow~ for parallel ops  |
+| Graph-Flow     | DAG-based orchestration, conditional routing             |
+| RustyClaw      | Security-first, 15 MB RAM, sandboxed tools               |
+| Swarm (fcn06)  | Conductor-specialist model with LLM-as-Judge evaluation  |
+| tokio-actors   | Tokio-native actor framework with typed messages,        |
+|                | bounded mailboxes, timer drift handling (MissPolicy)     |
+| Radkit         | A2A-first SDK, compile-time protocol compliance,         |
+|                | skill-based agent composition                            |
+| a2a-rs         | Complete A2A protocol implementation, hexagonal arch,    |
+|                | HTTP + WebSocket, JWT/OAuth2 auth                        |
+| supertrees     | Erlang/OTP-inspired supervision trees for async Rust     |
+
+** What nobody has built yet
+
+No framework combines all of these in one package:
+- High-performance concurrent agents (actor model with backpressure)
+- WASM-sandboxed tool execution with hot-reload
+- Graph-based orchestration with conditional routing
+- Erlang-style supervision with heartbeat-based hang detection
+- Distributed tracing AND metrics AND structured logging
+- Built-in cost/token budgets per agent and per swarm run
+- Graceful shutdown with configurable drain policies
+- Security: prompt injection defense, egress controls, WASM signing
+
+That's the gap.
+
+** What is NOT feasible to build (scope it out early)
+
+- *Shared LLM KV-cache across agents*: only works if you control the
+  inference server (vLLM, TGI, llama.cpp). For hosted APIs (OpenAI,
+  Anthropic, Google), the KV-cache lives server-side and you can't
+  share it. Your framework can integrate with prefix-caching servers,
+  but can't implement KV-sharing itself. Mark this as a stretch goal
+  requiring self-hosted inference.
+
+* Architecture
+
+#+begin_example
+  ┌─────────────────────────────────────────────┐
+  │             SwarmRuntime                     │
+  │       (Tokio multi-threaded runtime)        │
+  │                                             │
+  │  ┌──────────────────────────────────┐       │
+  │  │  CancellationToken (tokio-util)  │       │
+  │  │  + JoinSet / TaskTracker         │       │
+  │  └──────────────┬───────────────────┘       │
+  │                 │                           │
+  │  ┌──────────────▼───────────────┐           │
+  │  │ Supervisor (heartbeat + watchdog)│       │
+  │  │ restart policies: one-for-one,  │       │
+  │  │ one-for-all, rest-for-one       │       │
+  │  └────┬─────────────────────┬──────┘       │
+  │       │                     │              │
+  │  ┌────▼─────┐    ┌─────────▼──┐           │
+  │  │  Agent   │◄──▶│   Agent    │           │
+  │  │  Actor   │    │   Actor    │           │
+  │  │(Handle+  │    │ (Handle+   │           │
+  │  │ Task)    │    │  Task)     │           │
+  │  └────┬─────┘    └─────┬──────┘           │
+  │       │                │                  │
+  │  ┌────▼────────────────▼──────┐           │
+  │  │ Communication Layer        │           │
+  │  │ mpsc+oneshot: request/reply│           │
+  │  │ broadcast: announcements   │           │
+  │  │ watch: latest-state signals│           │
+  │  └────┬──────────────────┬────┘           │
+  │       │                  │                │
+  │  ┌────▼────┐    ┌───────▼───────┐        │
+  │  │  WASM   │    │ Cache (moka)  │        │
+  │  │Sandbox  │    │ + Persistence │        │
+  │  │(spawn_  │    │   (sqlx)      │        │
+  │  │blocking)│    └───────────────┘        │
+  │  └─────────┘                             │
+  │                                           │
+  │  ┌──────────────────────────────────┐     │
+  │  │ Observability (3 pillars)        │     │
+  │  │ Traces: tracing + OTel          │     │
+  │  │ Metrics: queue depth, restarts, │     │
+  │  │   tokens, latency, cost         │     │
+  │  │ Logs: tracing-subscriber + JSON │     │
+  │  └──────────────────────────────────┘     │
+  │                                           │
+  │  ┌──────────────────────────────────┐     │
+  │  │ Budget System                    │     │
+  │  │ Per-run token limits, per-agent  │     │
+  │  │ quotas, cost tracking, kill on   │     │
+  │  │ budget exceeded                  │     │
+  │  └──────────────────────────────────┘     │
+  │                                           │
+  │  ┌──────────────────────────────────┐     │
+  │  │ Health endpoints (axum)          │     │
+  │  │ /healthz  /readyz  /metrics      │     │
+  │  └──────────────────────────────────┘     │
+  └─────────────────────────────────────────────┘
+#+end_example
+
+** The actor model
+
+Following Alice Ryhl's canonical Tokio actor pattern (from her blog post
+"Actors with Tokio"), each agent splits into two pieces:
+
+- *Handle*: the external API. Cloneable, ~Send + Sync~. Holds a
+  bounded ~mpsc::Sender~.
+- *Task*: the internal runtime. Owns mutable state, runs in a spawned
+  tokio task, receives messages through the channel.
+
+Also look at the ~tokio-actors~ crate (v0.3, Feb 2026) which
+implements this pattern with typed messages, bounded mailboxes, lifecycle
+hooks (~on_started~, ~on_stopped~), timer drift handling, and mailbox
+monitoring. Could be used as a dependency or as a reference design.
+
+#+begin_src rust
+#[derive(Clone)]
+pub struct AgentHandle {
+    id: AgentId,
+    sender: mpsc::Sender<AgentMessage>,  // bounded for backpressure
+    metadata: Arc<AgentMetadata>,
+    cancel: CancellationToken,           // for graceful shutdown
+}
+
+enum AgentMessage {
+    Execute {
+        task: TaskPayload,
+        respond_to: oneshot::Sender<Result<AgentOutput, AgentError>>,
+        span: tracing::Span,            // propagate trace context
+    },
+    Delegate { to: AgentId, task: TaskPayload },
+    UpdateContext { key: String, value: Value },
+    Heartbeat { respond_to: oneshot::Sender<()> },
+    Shutdown { deadline: Duration, reason: String },
+}
+
+struct AgentTask {
+    receiver: mpsc::Receiver<AgentMessage>,
+    llm: Box<dyn LlmProvider>,
+    tools: ToolRegistry,
+    memory: AgentMemory,
+    shared_ctx: SharedContext,
+    supervisor: SupervisorHandle,
+    cancel: CancellationToken,
+    budget: TokenBudget,                 // per-agent token/cost limit
+}
+#+end_src
+
+** Communication patterns
+
+| Pattern          | Mechanism                            | Semantics                  | When to use it            |
+|------------------+--------------------------------------+----------------------------+---------------------------|
+| Request-reply    | ~mpsc~ + ~oneshot~                   | Async, reliable            | Ask another agent, wait   |
+| Fire-and-forget  | ~mpsc::Sender::send()~               | Async, reliable            | Delegate without waiting  |
+| Broadcast        | ~tokio::sync::broadcast~             | *Lossy* for slow receivers | Announce to all agents    |
+| Latest-value     | ~tokio::sync::watch~                 | Always latest, no queue    | Config updates, signals   |
+| Pub-sub          | Registry of per-subscriber ~mpsc~    | Reliable, bounded          | Subscribe to event types  |
+| Shared cache     | ~Arc<moka::Cache>~                   | Best-effort, TTL-based     | Read-mostly coordination  |
+
+⚠ ~tokio::sync::broadcast~ drops messages for slow receivers (~Lagged(n)~
+error). Don't use it for workflow-critical events. For reliable fanout,
+use per-subscriber ~mpsc~ channels registered in a topic registry with
+dead-subscriber pruning.
+
+** Backpressure
+
+Bounded ~mpsc~ channels provide async backpressure: ~send().await~ yields
+(does NOT block the OS thread) when the inbox is full. This is async
+backpressure, not thread-blocking. Important distinction.
+
+⚠ Bounded mailbox alone is NOT a complete backpressure strategy:
+- If many senders await on a full queue, you get cascading stalls
+- Need global admission control: per-run concurrency budgets, per-agent
+  quotas, and load-shedding policy (reject new work vs queue vs drop)
+- For finer control, wrap agent handles with ~tower::ServiceBuilder~
+  using ~RateLimit~ and ~ConcurrencyLimit~ layers
+- Consider ~try_send()~ with load-shedding for non-critical messages
+
+** Shared state: minimize it
+
+⚠ *Anti-pattern warning*: mixing actor model + pervasive shared mutable
+state (~Arc<DashMap>~, ~RwLock<Vec<Message>>~) defeats the benefits of
+actors (isolation, reasoning, testing). Creates hidden coupling, race
+conditions, and painful debugging ("who wrote this key?").
+
+*Rule*: shared mutable state should be limited to:
+1. *Caches* (read-mostly, best-effort, TTL-evicted) — use ~moka~
+2. *Append-only logs / persisted artifacts* — use SQLite
+3. *Configuration / signals* — use ~tokio::sync::watch~
+
+Everything else should go through messages/events.
+
+#+begin_src rust
+// Hot cache for agent-to-agent coordination (best-effort, lossy OK)
+let shared_cache: moka::future::Cache<String, Value> =
+    moka::future::Cache::builder()
+        .max_capacity(10_000)
+        .time_to_live(Duration::from_secs(300))
+        .build();
+
+// Cold storage for persistence (source of truth)
+let persistent_store = SqliteMemoryStore::new("swarm.db").await?;
+
+pub struct SharedContext {
+    hot: moka::future::Cache<String, Value>,
+    cold: Arc<dyn PersistentStore>,
+}
+#+end_src
+
+Note: ~DashMap~ uses *sharded locks*, not lock-free reads. Reads can
+contend under heavy write load. ~moka~ is better for read-heavy caches
+with its W-TinyLFU eviction policy.
+
+** WASM tool sandboxing
+
+Using ~wasmtime~ with the Component Model. Each tool runs in its own
+linear memory space with deny-by-default permissions. CPU fuel limits
+(or epoch interruption) prevent infinite loops. Filesystem and network
+access are blocked unless explicitly granted via WASI capabilities.
+
+⚠ *Run WASM execution on ~spawn_blocking~ or a dedicated thread pool*,
+NOT on Tokio worker threads. Wasmtime is CPU-heavy and will starve
+async I/O if run on the main executor.
+
+⚠ *Security for hot-reload*: loading new ~.wasm~ binaries at runtime
+is a supply-chain attack surface. Require:
+- Cryptographic signature verification (Notation, Cosign)
+- Provenance metadata and version pinning
+- Allowlist registries
+- Wall-clock timeout + ~StoreLimits~ for memory
+
+Microsoft's Wassette project (Aug 2025) is the reference design:
+WASM Component → MCP tool bridge, deny-by-default permissions, OCI
+registry integration, built on Wasmtime. Written in Rust. Installable
+as a standalone binary.
+
+Also see Capsule (mavdol) for Python/JS sandboxing via WASM with
+resource limits (CPU, RAM, timeout, filesystem allowlists).
+
+** Graceful shutdown (first-class module)
+
+~SwarmRuntime::run()~ must own:
+1. A ~CancellationToken~ (from ~tokio-util~) for global shutdown signal
+2. A ~TaskTracker~ or ~JoinSet~ for spawned agent tasks
+3. A shutdown sequence:
+   a. Stop accepting new work (close admission)
+   b. Signal all agents via CancellationToken
+   c. Drain mailboxes (configurable: drain vs drop policy)
+   d. Hard timeout (e.g., 30s) then abort remaining tasks
+   e. Flush persistence (checkpoints, tool outputs)
+
+Per-agent: ~Shutdown { deadline, reason }~ message + ~AgentHandle::shutdown()~.
+
+Reference: Tokio's [[https://tokio.rs/tokio/topics/shutdown][graceful shutdown guide]], mini-redis implementation.
+
+** Budget system (critical for swarms)
+
+Without budgets, swarms become uncontrollable. Implement from day 1:
+- Per-run token limit (total tokens across all agents)
+- Per-agent token quota (prevent one agent from hogging)
+- Provider-level rate limiting keyed by API key
+- Cost tracking (map tokens → dollars)
+- Automatic cancellation when budget exceeded
+- Guardrails when tool calls explode (max tool invocations per turn)
+
+** Health and readiness
+
+Expose via ~axum~ HTTP endpoints:
+- ~/healthz~ (liveness): runtime alive, event loop not wedged
+- ~/readyz~ (readiness): DB migrated, tool runtime initialized,
+  LLM providers reachable, quota OK
+- ~/metrics~ (Prometheus): queue depths, inflight LLM calls, tool
+  durations, restarts, token/cost counters
+
+* Technical challenges
+
+** Supervision and crash recovery
+
+Agents can panic, deadlock, or hang on slow LLM calls. The supervisor
+must do MORE than just monitor ~JoinHandle~ results:
+
+1. *JoinHandle monitoring*: detects termination and panics, but NOT hangs.
+2. *Heartbeat/watchdog*: periodic ~Heartbeat~ messages with timeouts.
+   If an agent doesn't respond within N seconds, assume it's hung.
+   Use ~tokio::time::timeout~ on heartbeat responses.
+3. *LLM call timeouts*: wrap ALL LLM API calls with
+   ~tokio::time::timeout(Duration::from_secs(120), llm_call).await~.
+4. *Restart policies*: one-for-one, one-for-all, rest-for-one.
+   Exponential backoff with jitter on restart.
+5. *State recovery*: default = restart stateless agents from scratch.
+   For stateful agents, require explicit checkpoint hooks. Document
+   what state is reconstructed vs lost vs duplicated.
+
+The ~supertrees~ crate on crates.io provides an experimental
+Erlang/OTP-style supervision tree for async Rust. Worth evaluating as
+a dependency.
+
+** Memory sharing
+
+~moka::future::Cache~ for hot caches with TTL expiration. Prefer over
+raw ~DashMap~ for read-heavy patterns (W-TinyLFU eviction is better
+than sharded-lock HashMap). For conversation histories shared between
+agents, prefer message-passing over ~RwLock<Vec<Message>>~. The Rust
+ownership model helps: ~Arc~ + ~moka~ is well-understood.
+
+** Distributed tracing
+
+The ~tracing~ + ~tracing-opentelemetry~ + ~opentelemetry-otlp~ stack
+handles traces. Add:
+- ~tracing-subscriber~ with ~EnvFilter~ + JSON formatting (required)
+- ~console-subscriber~ for diagnosing Tokio tasks in staging/prod
+- OpenTelemetry *metrics* (queue depth, latency histograms, error
+  rates, token usage, cost) — not just traces
+- Correlation IDs in messages for debugging
+- Redaction policy for secrets in logs/traces
+
+The tricky bit is propagating trace context through message channels:
+attach ~tracing::Span::current()~ to messages (add a ~span~ field to
+~AgentMessage~ variants).
+
+** Error recovery
+
+Layer it:
+1. Retry with backoff for transient LLM errors (~backon~ crate)
+2. Circuit breaker per LLM provider (custom middleware on Tower —
+   note: ~tower::limit~ is rate limiting, NOT a circuit breaker.
+   True circuit breaker (open/half-open/closed) needs custom impl
+   or a dedicated crate)
+3. Supervisor restart for panics (with heartbeat for hangs)
+4. LLM-as-judge evaluation for output quality
+5. Checkpoint/resume for long-running workflows
+6. Budget enforcement: cancel agents exceeding token/cost limits
+
+** Security (beyond WASM sandboxing)
+
+1. *Prompt injection / tool output injection*: tools returning
+   malicious text that coerces agents to exfiltrate secrets or take
+   unintended actions. Mitigation: structured tool outputs (JSON
+   schema), strict parsing/validation, policy layer ("tool results
+   are data, not instructions").
+
+2. *Secrets exposure*: API keys in logs/traces, tool stdout, panic
+   messages. Mitigation: ~secrecy~ crate wrappers, log redaction,
+   ensure OTel exporters don't leak authorization headers.
+
+3. *Egress control / SSRF*: even if WASM tools have no network, the
+   agent runtime itself calls LLM APIs and may fetch URLs. Mitigation:
+   outbound allowlists, DNS pinning, request filtering.
+
+4. *WASM supply chain*: "load new .wasm at runtime" = attack surface.
+   Mitigation: signature verification, provenance metadata, version
+   pinning, allowlist registries, staged rollout.
+
+5. *Multi-tenant isolation* (if applicable): one tenant can starve
+   others via mailbox flooding, tool CPU, cache blowups. Mitigation:
+   per-tenant quotas, namespaced caches, admission control.
+
+6. *Distributed mode auth*: agent-to-agent messages over NATS/gRPC
+   need authn/z. Mitigation: mTLS, signed messages, scoped
+   credentials, least-privilege topics, audit logs.
+
+* Performance: Rust vs Python
+
+From the LiquidOS benchmark (2026), using a ReAct agent with GPT-4o-mini,
+50 requests at 10 concurrency:
+
+| Metric      | AutoAgents (Rust) | LangChain (Python) | LangGraph (Python) |
+|-------------+-------------------+--------------------+--------------------|
+| Avg latency | 5,714 ms          | 6,046 ms           | 10,155 ms          |
+| Throughput  | 4.97 rps          | 4.26 rps           | 2.70 rps           |
+| Peak memory | 1,046 MB          | 5,706 MB           | 5,570 MB           |
+| CPU usage   | 29.2%             | 64.0%              | 39.7%              |
+| Cold start  | 4 ms              | 62 ms              | 63 ms              |
+
+Rust uses 5x less memory, delivers 36% more throughput, and starts 15x
+faster. At scale (50 instances), Rust needs ~51 GB total; Python needs
+230-279 GB.
+
+⚠ *Caveat on these numbers*:
+- LLM API latency dominates; framework overhead is second-order.
+  The big win is memory, not raw speed.
+- "Tokio mpsc delivers ~10M msg/sec" is highly workload-dependent
+  (message size, contention, cores, allocator, instrumentation).
+  Don't quote a single number without conditions.
+- "Python: each agent needs its own GC heap" is overstated. Multiple
+  Python agents CAN run in one process with shared heap (still
+  memory-heavy due to GIL contention + GC overhead, but the reasoning
+  should be precise).
+
+For a 100-agent swarm specifically:
+- Rust: ~1.5-3 GB total (agents share the Tokio thread pool)
+- Python: ~15-30 GB in a single process (shared heap but GIL),
+  or ~50-100 GB across multiple processes (no GIL contention)
+- Tokio ~mpsc~ throughput is 10-100x higher than Python asyncio queues
+  (exact factor depends on message size and contention)
+
+* Feasibility
+
+All estimates assume one engineer with Amp/Claude Code. AI-assisted
+coding compresses boilerplate-heavy work (actor scaffolding, trait
+impls, serde types, test stubs, config parsing) by roughly 3-5x. The
+bottleneck shifts from typing code to *design decisions, debugging
+async edge cases, and integration testing* — things AI helps less with.
+
+Rule of thumb: AI shrinks "write the code" from 70% to 20% of the
+time. The remaining 80% is architecture decisions, debugging subtle
+concurrency bugs, fighting the borrow checker on complex lifetimes,
+and integration testing. Rust specifically resists vibe-coding harder
+than most languages because the compiler rejects anything unsound.
+
+** Weekend MVP (2 days with AI assist)
+
+- Actor model with Tokio ~mpsc~/~oneshot~
+- 3-5 agents running concurrently
+- Sequential and parallel orchestration
+- Single LLM provider (OpenAI via ~reqwest~)
+- Shared ~moka~ cache
+- Basic ~tracing~ instrumentation
+- Hardcoded tools (no WASM yet)
+- ~CancellationToken~ for shutdown
+- Basic test coverage (AI-generated test stubs)
+
+About 1,500-2,500 lines of code. Demo: 5 specialized agents
+(researcher, writer, editor, fact-checker, formatter) collaborating on a
+research report.
+
+AI impact: massive here. The actor boilerplate, message types, serde
+derives, LLM API client, channel wiring — all straightforward for AI
+to generate. This is the phase where AI assistance shines most.
+
+Realistic outcome: impressive demo with clean code. Still not
+production-quality (no retries, no drain policies, no stable API).
+
+** 2-week sprint (one engineer + AI)
+
+Add multiple LLM providers (via ~rig-core~), basic WASM sandboxing via
+Wasmtime, supervisor with heartbeat + restart-on-panic, graph-based
+orchestration, OpenTelemetry export, SQLite persistence, CLI interface,
+graceful shutdown, health endpoints, budget system skeleton.
+~5,000-8,000 LOC.
+
+Without AI: 4-6 weeks. With Amp/Claude Code: 2-3 weeks realistic.
+
+AI compresses: trait impls, provider adapters, config/CLI (clap +
+figment), health endpoint handlers, SQL schema + migrations, test
+scaffolding, OpenTelemetry setup boilerplate.
+
+AI does NOT compress: Wasmtime integration debugging (fuel limits,
+epoch interruption, WASI capability grants — subtle runtime behavior),
+supervisor restart logic correctness (race conditions between
+heartbeat timeouts and channel closures), graph orchestration edge
+cases (cycles, conditional routing, error propagation through DAGs).
+
+** Full vision (2-3 months, one engineer + AI)
+
+WASM Component Model with hot-reload + signing, A2A protocol, MCP
+support, distributed mode via gRPC/NATS (with authn/z), web dashboard
+with live agent topology, streaming across agent chains, budget system,
+security hardening. ~15,000-25,000 LOC.
+
+Without AI: 3-6 months with 2-4 devs. With AI: one senior engineer
+can realistically do this in 2-3 months, because:
+- AI handles the long tail of protocol implementations (A2A, MCP,
+  gRPC service definitions, WebSocket handlers)
+- AI generates the web dashboard frontend (this is where AI coding
+  tools provide 5-10x speedup — HTML/CSS/JS is their sweet spot)
+- AI writes integration tests, doc comments, examples
+
+Still slow regardless of AI:
+- Distributed mode correctness (consensus, exactly-once delivery,
+  partition tolerance) — these are design problems, not code problems
+- WASM Component Model + WIT interface design — immature tooling,
+  sparse docs, compiler errors are cryptic
+- Security hardening (threat modeling, penetration testing, auth
+  flows) — AI can scaffold but can't validate
+
+"Plugin marketplace" and "shared LLM KV-cache" are separate products.
+Don't mix them into the core timeline.
+
+** Component difficulty breakdown (with AI assist)
+
+"AI boost" = how much AI-assisted coding compresses the time.
+High = 3-5x faster (boilerplate-heavy). Low = marginal help
+(design/debugging-heavy). Time column reflects AI-assisted estimates.
+
+| Component                       | Difficulty    | Time (w/ AI) | AI boost |
+|---------------------------------+---------------+--------------+----------|
+| Agent actor model               | Easy          | 0.5-1 day    | High     |
+| Tokio channel communication     | Easy          | 0.5 day      | High     |
+| Graceful shutdown + lifecycle   | Medium        | 1-2 days     | Medium   |
+| LLM provider trait abstraction  | Easy-Medium   | 0.5-1 day    | High     |
+| Budget/quota system             | Medium        | 1-2 days     | Medium   |
+| Graph-based conditional routing | Medium        | 2-3 days     | Medium   |
+| WASM tool sandboxing (basic)    | Medium        | 2-3 days     | Low      |
+| WASM Component Model + WIT      | Medium-Hard   | 1-2 weeks    | Low      |
+| WASM signing + hot-reload       | Medium-Hard   | 1 week       | Medium   |
+| Supervision (heartbeat+restart) | Medium        | 2-3 days     | Low      |
+| OpenTelemetry (traces+metrics)  | Medium        | 1-2 days     | High     |
+| Health/readiness endpoints      | Easy          | 0.5 day      | High     |
+| Security hardening              | Medium-Hard   | 1-2 weeks    | Low      |
+| LLM KV-cache sharing            | Hard          | 3-6 weeks    | Low      |
+| Distributed mode (NATS/gRPC)    | Hard          | 4-8 weeks    | Medium   |
+| Web dashboard                   | Medium        | 1-2 weeks    | High     |
+
+* Demo ideas
+
+** "The swarm solves it"
+
+100 agents decompose a complex research question in real-time. A planner
+agent breaks it into 15-20 subtasks. Research agents query different
+sources. Fact-checkers cross-validate. Synthesis agents combine findings.
+A writer produces the final report. An editor polishes it. Web dashboard
+shows the agent graph with messages flowing between nodes in real-time.
+Total time: 30-60 seconds instead of 10-15 minutes with a single agent.
+
+The Jaeger trace would show 100 spans, 45 seconds wall-clock, 50K tokens
+throughput, 800 MB memory. Show the budget tracker: total cost $0.47.
+
+** "Self-healing swarm"
+
+Kill agents mid-execution. The supervisor detects the crash within
+100ms (via JoinHandle) or the hang within 5s (via heartbeat timeout),
+restarts the agent, replays its checkpoint, and the swarm finishes the
+task without data loss. Show the restart count metric ticking up.
+
+** "Untrusted tool execution"
+
+Load a malicious WASM tool that tries to read ~/etc/passwd~, open a
+network socket, and infinite-loop. Show the sandbox blocking everything
+and killing the tool after fuel exhaustion, while the agent continues
+with a graceful error message. Bonus: show signature verification
+rejecting an unsigned .wasm binary.
+
+** "Rust vs Python side-by-side"
+
+Same 10-agent task, Rust framework vs Python CrewAI. Show: 5x less
+memory, ~35% higher throughput, 4ms vs 60ms cold start. Emphasize the
+memory story (this is where Rust wins most clearly — latency differences
+are smaller because LLM API calls dominate).
+
+** "Budget kill switch"
+
+Launch 50 agents, set a $2.00 budget. Watch agents work. Budget
+tracker counts down. At $2.00, the runtime cancels all in-flight LLM
+calls, drains results from completed agents, and returns a partial
+report with a cost summary.
+
+* Crates
+
+** Runtime and concurrency
+
+| Crate            | Purpose                              |
+|------------------+--------------------------------------|
+| tokio            | Async runtime (full features)        |
+| tokio-util       | CancellationToken, TaskTracker       |
+| futures          | FuturesUnordered, select!, join!     |
+| dashmap          | Sharded-lock concurrent HashMap      |
+| moka             | Concurrent cache with W-TinyLFU, TTL |
+| petgraph         | DAG/graph modeling for orchestration  |
+
+Note: ~async-trait~ is less needed since Rust 1.75+ (RPITIT / async fn
+in traits). Use native async traits where possible, fall back to
+~async-trait~ for dyn dispatch.
+
+** LLM integration
+
+| Crate              | Purpose                         |
+|--------------------+---------------------------------|
+| reqwest            | HTTP client for LLM APIs        |
+| reqwest-eventsource | SSE parsing for streaming      |
+| tiktoken-rs        | Token counting (may lag newer   |
+|                    | encodings; have a fallback)     |
+| rig-core           | Optional: reuse Rig's 20+       |
+|                    | provider integrations           |
+
+** WASM sandboxing
+
+| Crate          | Purpose                           |
+|----------------+-----------------------------------|
+| wasmtime       | WASM runtime engine               |
+| wasmtime-wasi  | WASI system interface             |
+| wit-bindgen    | Bindings from WIT interfaces      |
+| wassette       | Reference: WASM→MCP bridge (MSFT) |
+
+** Observability
+
+| Crate                  | Purpose                         |
+|------------------------+---------------------------------|
+| tracing                | Structured instrumentation      |
+| tracing-subscriber     | EnvFilter, JSON formatting      |
+| tracing-opentelemetry  | Bridge to OpenTelemetry         |
+| opentelemetry-otlp     | OTLP exporter                   |
+| console-subscriber     | Tokio task diagnostics (staging) |
+| tracing-error          | Error-span integration          |
+
+** Persistence and networking
+
+| Crate      | Purpose                       |
+|------------+-------------------------------|
+| sqlx       | Async SQLite/Postgres         |
+| tonic      | gRPC (distributed mode)       |
+| axum       | HTTP API for dashboard/health |
+| async-nats | NATS pub/sub (distributed)    |
+
+** Error handling and security
+
+| Crate     | Purpose                                    |
+|-----------+--------------------------------------------|
+| anyhow    | Application errors                         |
+| thiserror | Typed library errors                       |
+| backon    | Retry with backoff                         |
+| tower     | Service middleware (rate limit, concurrency |
+|           | limit, timeout, load shedding — NOT a      |
+|           | circuit breaker despite common claims)     |
+| secrecy   | Secret wrapping, log redaction             |
+
+** Configuration
+
+| Crate    | Purpose                           |
+|----------+-----------------------------------|
+| clap     | CLI argument parsing              |
+| figment  | Layered config (file + env + CLI) |
+| serde    | Serialization for config/messages |
+
+* Strategic notes
+
+1. Don't start from scratch. Use ~rig-core~ for LLM provider abstraction
+   and build the swarm layer on top. 20+ providers for free.
+2. The Tokio actor pattern gives you message isolation and backpressure,
+   but NOT clean shutdown — you must implement shutdown signaling,
+   mailbox draining, task cancellation, and timeouts explicitly.
+   Use ~CancellationToken~ from ~tokio-util~.
+3. Start with ~moka~ for shared cache. Minimize ~DashMap~ usage.
+   Add SQLite persistence in week 2. Prefer messages over shared state.
+4. WASM sandboxing is the most differentiated feature. Ship it early.
+   Look at Wassette for design inspiration.
+5. The "wow" demo is 100 agents + live web visualization + budget
+   tracker. Build toward that.
+6. Shared LLM KV-cache across agents is only feasible with self-hosted
+   inference (vLLM/TGI/llama.cpp prefix caching). Don't build it for
+   hosted API targets. Save it for way later.
+7. Add a budget system from day 1. Swarms without token/cost budgets
+   become uncontrollable and expensive.
+8. Security is not optional. Prompt injection defense, secrets
+   management (~secrecy~), and WASM signing are production requirements.
+9. Consider ~tokio-actors~ crate as a foundation instead of hand-rolling
+   the actor pattern. It handles the edge cases (timer drift, lifecycle,
+   mailbox monitoring) that you'd otherwise spend a week debugging.
+10. ADK-Rust (zavora-ai) is surprisingly feature-complete. Study its
+    design before building overlapping features. Your value-add is the
+    supervision+actor+WASM combination, not basic LLM orchestration.
+
+* Sources
+
+- Rig framework (6.2K stars): [[https://rig.rs/][rig.rs]]
+- AutoAgents: [[https://github.com/liquidos-ai/AutoAgents][github.com/liquidos-ai/AutoAgents]]
+- AutoAgents benchmark suite: [[https://github.com/liquidos-ai/autoagents-bench][github.com/liquidos-ai/autoagents-bench]]
+- ADK-Rust (zavora-ai, v0.3.2): [[https://github.com/zavora-ai/adk-rust][github.com/zavora-ai/adk-rust]]
+- a2a-rs (A2A protocol): [[https://github.com/EmilLindfors/a2a-rs][github.com/EmilLindfors/a2a-rs]]
+- Radkit (A2A-first SDK): [[https://github.com/agents-sh/radkit][github.com/agents-sh/radkit]]
+- tokio-actors crate: [[https://github.com/uwejan/tokio-actors][github.com/uwejan/tokio-actors]]
+- supertrees crate: [[https://crates.io/crates/supertrees][crates.io/crates/supertrees]]
+- Actors with Tokio: [[https://ryhl.io/blog/actors-with-tokio/][ryhl.io/blog/actors-with-tokio]]
+- Tokio graceful shutdown: [[https://tokio.rs/tokio/topics/shutdown][tokio.rs/tokio/topics/shutdown]]
+- Wassette (Microsoft, Aug 2025): [[https://github.com/microsoft/wassette][github.com/microsoft/wassette]]
+- Capsule (WASM sandboxing): [[https://github.com/mavdol/capsule][github.com/mavdol/capsule]]
+- Moka cache: [[https://github.com/moka-rs/moka][github.com/moka-rs/moka]]
+- Wasmtime: [[https://github.com/bytecodealliance/wasmtime][github.com/bytecodealliance/wasmtime]]
+- RustyClaw: [[https://github.com/rexlunae/RustyClaw][github.com/rexlunae/RustyClaw]]
+- Google ADK (official, no Rust): [[https://google.github.io/adk-docs/][google.github.io/adk-docs]]
+- Benchmark article: [[https://dev.to/saivishwak/benchmarking-ai-agent-frameworks-in-2026-autoagents-rust-vs-langchain-langgraph-llamaindex-338f][dev.to benchmark article]]
