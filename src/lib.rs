@@ -14,6 +14,7 @@
 //! - **Budget enforcement**: per-run and per-agent token/cost limits with
 //!   automatic cancellation on exceed.
 
+pub mod agent;
 pub mod config;
 pub mod error;
 pub mod ids;
