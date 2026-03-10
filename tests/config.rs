@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use mra::config::{AgentConfig, RestartPolicy, RuntimeConfig};
+use mra::config::{AgentConfig, MraConfig, RestartPolicy, RuntimeConfig};
 
 #[test]
 fn restart_policy_defaults() {
@@ -15,7 +15,7 @@ fn restart_policy_defaults() {
 fn agent_config_defaults() {
     let config = AgentConfig::new("test-agent");
     assert_eq!(config.name, "test-agent");
-    assert_eq!(config.mailbox_size, 32);
+    assert_eq!(config.mailbox_size, 8);
 }
 
 #[test]
@@ -39,4 +39,23 @@ fn runtime_config_defaults() {
     let config = RuntimeConfig::default();
     assert_eq!(config.max_agents, 100);
     assert_eq!(config.shutdown_timeout, Duration::from_secs(30));
+}
+
+#[test]
+fn test_mra_config_defaults() {
+    let config = MraConfig::defaults();
+    assert_eq!(config.runtime.max_agents, 100);
+    assert_eq!(config.runtime.shutdown_timeout_secs, 30);
+    assert_eq!(config.llm.base_url, "https://openrouter.ai/api/v1");
+}
+
+#[test]
+fn test_llm_config_fields() {
+    use mra::config::LlmConfig;
+    let config = LlmConfig {
+        api_key: "test".into(),
+        model: "gpt-4".into(),
+        base_url: "https://example.com".into(),
+    };
+    assert_eq!(config.model, "gpt-4");
 }

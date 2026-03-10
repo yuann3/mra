@@ -1,0 +1,8 @@
+[llm]
+api_key = "your-openrouter-api-key"
+model = "anthropic/claude-sonnet-4"
+base_url = "https://openrouter.ai/api/v1"
+
+[runtime]
+max_agents = 100
+shutdown_timeout_secs = 30

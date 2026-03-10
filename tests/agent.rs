@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use mra::agent::{AgentBehavior, AgentCtx, AgentHandle, AgentReply, Task};
@@ -10,11 +11,7 @@ use tokio_util::sync::CancellationToken;
 struct EchoBehavior;
 
 impl AgentBehavior for EchoBehavior {
-    async fn handle(
-        &mut self,
-        _ctx: &mut AgentCtx,
-        input: Task,
-    ) -> Result<AgentReply, AgentError> {
+    async fn handle(&mut self, _ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
         Ok(AgentReply {
             task_id: input.id,
             output: input.instruction.clone(),
@@ -29,11 +26,7 @@ struct SlowBehavior {
 }
 
 impl AgentBehavior for SlowBehavior {
-    async fn handle(
-        &mut self,
-        _ctx: &mut AgentCtx,
-        input: Task,
-    ) -> Result<AgentReply, AgentError> {
+    async fn handle(&mut self, _ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
         tokio::time::sleep(self.delay).await;
         Ok(AgentReply {
             task_id: input.id,
@@ -46,7 +39,11 @@ impl AgentBehavior for SlowBehavior {
 #[tokio::test]
 async fn test_agent_execute() {
     let config = AgentConfig::new("echo");
-    let ctx = AgentCtx { id: AgentId::new() };
+    let ctx = AgentCtx {
+        id: AgentId::new(),
+        peers: HashMap::new(),
+        llm: None,
+    };
     let cancel = CancellationToken::new();
 
     let spawned = AgentHandle::spawn(config, EchoBehavior, ctx, cancel);
@@ -62,7 +59,11 @@ async fn test_agent_execute() {
 #[tokio::test]
 async fn test_agent_shutdown() {
     let config = AgentConfig::new("echo");
-    let ctx = AgentCtx { id: AgentId::new() };
+    let ctx = AgentCtx {
+        id: AgentId::new(),
+        peers: HashMap::new(),
+        llm: None,
+    };
     let cancel = CancellationToken::new();
 
     let spawned = AgentHandle::spawn(config, EchoBehavior, ctx, cancel);
@@ -78,7 +79,11 @@ async fn test_agent_shutdown() {
 #[tokio::test]
 async fn test_agent_cancel() {
     let config = AgentConfig::new("echo");
-    let ctx = AgentCtx { id: AgentId::new() };
+    let ctx = AgentCtx {
+        id: AgentId::new(),
+        peers: HashMap::new(),
+        llm: None,
+    };
     let cancel = CancellationToken::new();
 
     let spawned = AgentHandle::spawn(config, EchoBehavior, ctx, cancel);
@@ -92,7 +97,11 @@ async fn test_agent_cancel() {
 #[tokio::test]
 async fn test_agent_backpressure() {
     let config = AgentConfig::new("slow").with_mailbox_size(1);
-    let ctx = AgentCtx { id: AgentId::new() };
+    let ctx = AgentCtx {
+        id: AgentId::new(),
+        peers: HashMap::new(),
+        llm: None,
+    };
     let cancel = CancellationToken::new();
 
     let spawned = AgentHandle::spawn(
@@ -107,12 +116,8 @@ async fn test_agent_backpressure() {
     let handle1 = spawned.handle.clone();
     let handle2 = spawned.handle.clone();
 
-    let t1 = tokio::spawn(async move {
-        handle1.execute(Task::new("task1")).await
-    });
-    let t2 = tokio::spawn(async move {
-        handle2.execute(Task::new("task2")).await
-    });
+    let t1 = tokio::spawn(async move { handle1.execute(Task::new("task1")).await });
+    let t2 = tokio::spawn(async move { handle2.execute(Task::new("task2")).await });
 
     // Both should eventually complete (second waits for channel space)
     let timeout = Duration::from_secs(5);
@@ -138,7 +143,11 @@ async fn test_agent_backpressure() {
 #[tokio::test]
 async fn test_agent_progress_updates() {
     let config = AgentConfig::new("slow");
-    let ctx = AgentCtx { id: AgentId::new() };
+    let ctx = AgentCtx {
+        id: AgentId::new(),
+        peers: HashMap::new(),
+        llm: None,
+    };
     let cancel = CancellationToken::new();
 
     let spawned = AgentHandle::spawn(
@@ -156,9 +165,7 @@ async fn test_agent_progress_updates() {
 
     // Send a task and give it a moment to start
     let handle = spawned.handle.clone();
-    let task_handle = tokio::spawn(async move {
-        handle.execute(Task::new("work")).await
-    });
+    let task_handle = tokio::spawn(async move { handle.execute(Task::new("work")).await });
 
     // Wait for reply
     task_handle.await.unwrap().unwrap();
@@ -174,7 +181,11 @@ async fn test_agent_progress_updates() {
 #[tokio::test]
 async fn test_agent_execute_after_channel_closed() {
     let config = AgentConfig::new("echo");
-    let ctx = AgentCtx { id: AgentId::new() };
+    let ctx = AgentCtx {
+        id: AgentId::new(),
+        peers: HashMap::new(),
+        llm: None,
+    };
     let cancel = CancellationToken::new();
 
     let spawned = AgentHandle::spawn(config, EchoBehavior, ctx, cancel);
@@ -200,4 +211,70 @@ async fn test_task_new_generates_unique_ids() {
 async fn test_task_context_defaults_to_null() {
     let t = Task::new("hello");
     assert_eq!(t.context, serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn test_agent_ctx_has_peers() {
+    let ctx = AgentCtx {
+        id: AgentId::new(),
+        peers: HashMap::new(),
+        llm: None,
+    };
+    assert!(ctx.peers.is_empty());
+}
+
+#[tokio::test]
+async fn test_agent_delegates_to_peer() {
+    struct DelegateBehavior;
+    impl AgentBehavior for DelegateBehavior {
+        async fn handle(
+            &mut self,
+            ctx: &mut AgentCtx,
+            input: Task,
+        ) -> Result<AgentReply, AgentError> {
+            let echo_handle = ctx.peers.get("echo").expect("echo peer not found");
+            let sub_task = Task::new(format!("delegated: {}", input.instruction));
+            let reply = echo_handle.execute(sub_task).await?;
+            Ok(AgentReply {
+                task_id: input.id,
+                output: format!("via-delegate: {}", reply.output),
+                tokens_used: 0,
+            })
+        }
+    }
+
+    let cancel = CancellationToken::new();
+
+    let echo_ctx = AgentCtx {
+        id: AgentId::new(),
+        peers: HashMap::new(),
+        llm: None,
+    };
+    let echo = AgentHandle::spawn(
+        AgentConfig::new("echo"),
+        EchoBehavior,
+        echo_ctx,
+        cancel.clone(),
+    );
+
+    let mut peers = HashMap::new();
+    peers.insert("echo".into(), echo.handle.clone());
+    let del_ctx = AgentCtx {
+        id: AgentId::new(),
+        peers,
+        llm: None,
+    };
+    let delegator = AgentHandle::spawn(
+        AgentConfig::new("delegator"),
+        DelegateBehavior,
+        del_ctx,
+        cancel.clone(),
+    );
+
+    let reply = delegator.handle.execute(Task::new("hello")).await.unwrap();
+    assert_eq!(reply.output, "via-delegate: delegated: hello");
+
+    cancel.cancel();
+    echo.join.await.unwrap();
+    delegator.join.await.unwrap();
 }

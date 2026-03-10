@@ -89,6 +89,19 @@ fn errors_implement_display() {
 }
 
 #[test]
+fn test_agent_error_llm_variant_preserves_classification() {
+    let llm_err = LlmError::RateLimit;
+    let agent_err = AgentError::Llm(llm_err);
+    assert_eq!(agent_err.classification(), ErrorClass::Overload);
+}
+
+#[test]
+fn test_agent_error_llm_timeout_is_transient() {
+    let agent_err = AgentError::Llm(LlmError::Timeout);
+    assert_eq!(agent_err.classification(), ErrorClass::Transient);
+}
+
+#[test]
 fn errors_implement_std_error() {
     fn assert_std_error<T: std::error::Error>() {}
     assert_std_error::<AgentError>();

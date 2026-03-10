@@ -39,6 +39,10 @@ pub enum AgentError {
     /// The agent's token/cost budget was exceeded.
     #[error("budget exceeded")]
     BudgetExceeded,
+    /// An LLM call failed. Wraps the original [`LlmError`] to preserve
+    /// error classification for retry/restart decisions.
+    #[error(transparent)]
+    Llm(#[from] LlmError),
 }
 
 impl AgentError {
@@ -49,6 +53,7 @@ impl AgentError {
             Self::Timeout => ErrorClass::Transient,
             Self::Cancelled => ErrorClass::Cancelled,
             Self::BudgetExceeded => ErrorClass::BudgetExceeded,
+            Self::Llm(e) => e.classification(),
         }
     }
 }

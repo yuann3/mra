@@ -5,10 +5,10 @@ use tokio_util::sync::CancellationToken;
 use crate::config::AgentConfig;
 use crate::error::AgentError;
 
+use super::AgentBehavior;
 use super::ctx::AgentCtx;
 use super::handle::AgentHandle;
 use super::message::AgentMessage;
-use super::AgentBehavior;
 
 /// Snapshot of an agent's activity, published via a `watch` channel.
 ///

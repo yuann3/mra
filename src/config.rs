@@ -2,6 +2,12 @@
 
 use std::time::Duration;
 
+use figment::{
+    Figment,
+    providers::{Env, Format, Serialized, Toml},
+};
+use serde::Deserialize;
+
 /// Controls how the supervisor restarts a failed agent.
 ///
 /// The supervisor tracks restart timestamps within a rolling [`window`](Self::window).
@@ -62,7 +68,7 @@ impl AgentConfig {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            mailbox_size: 32,
+            mailbox_size: 8,
             restart_policy: RestartPolicy::default(),
         }
     }
@@ -94,6 +100,90 @@ impl Default for RuntimeConfig {
         Self {
             max_agents: 100,
             shutdown_timeout: Duration::from_secs(30),
+        }
+    }
+}
+
+/// LLM provider configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LlmConfig {
+    pub api_key: String,
+    pub model: String,
+    pub base_url: String,
+}
+
+/// File-friendly runtime configuration with seconds instead of `Duration`.
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+pub struct RuntimeConfigFile {
+    pub max_agents: usize,
+    pub shutdown_timeout_secs: u64,
+}
+
+/// Top-level configuration loaded from `mra.toml` + env vars.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MraConfig {
+    pub llm: LlmConfig,
+    pub runtime: RuntimeConfigFile,
+}
+
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+struct MraConfigDefaults {
+    llm: LlmConfigDefaults,
+    runtime: RuntimeConfigFile,
+}
+
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+struct LlmConfigDefaults {
+    api_key: String,
+    model: String,
+    base_url: String,
+}
+
+impl Default for MraConfigDefaults {
+    fn default() -> Self {
+        Self {
+            llm: LlmConfigDefaults {
+                api_key: String::new(),
+                model: "openai/gpt-4o-mini".into(),
+                base_url: "https://openrouter.ai/api/v1".into(),
+            },
+            runtime: RuntimeConfigFile {
+                max_agents: 100,
+                shutdown_timeout_secs: 30,
+            },
+        }
+    }
+}
+
+impl MraConfig {
+    /// Loads config: defaults → `mra.toml` → `MRA_` env vars.
+    #[allow(clippy::result_large_err)]
+    pub fn load() -> Result<Self, figment::Error> {
+        Figment::new()
+            .merge(Serialized::defaults(MraConfigDefaults::default()))
+            .merge(Toml::file("mra.toml"))
+            .merge(Env::prefixed("MRA_").split("__"))
+            .extract()
+    }
+
+    /// Returns a config with only hardcoded defaults.
+    pub fn defaults() -> Self {
+        let d = MraConfigDefaults::default();
+        Self {
+            llm: LlmConfig {
+                api_key: d.llm.api_key,
+                model: d.llm.model,
+                base_url: d.llm.base_url,
+            },
+            runtime: d.runtime,
+        }
+    }
+
+    /// Converts to the runtime's [`RuntimeConfig`].
+    pub fn runtime_config(&self) -> RuntimeConfig {
+        RuntimeConfig {
+            max_agents: self.runtime.max_agents,
+            shutdown_timeout: Duration::from_secs(self.runtime.shutdown_timeout_secs),
         }
     }
 }

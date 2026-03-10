@@ -46,7 +46,5 @@ pub(crate) enum AgentMessage {
     /// Initiate graceful shutdown. The runner closes the receiver, drains
     /// buffered work until `deadline`, then fails any remaining callers
     /// with [`AgentError::Cancelled`].
-    Shutdown {
-        deadline: tokio::time::Instant,
-    },
+    Shutdown { deadline: tokio::time::Instant },
 }
