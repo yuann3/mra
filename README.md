@@ -1,5 +1,7 @@
 # mra
 
+> **⚠️ Super early stage / WIP.** Everything here works but the API will change. Don't build anything serious on this yet.
+
 A multi-agent runtime for Rust. Spawn AI agents as lightweight Tokio actors, wire them together, and let them talk to LLMs.
 
 ## What is this?
