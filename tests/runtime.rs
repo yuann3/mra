@@ -1,10 +1,13 @@
-use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
-use mra::agent::{AgentBehavior, AgentCtx, AgentReply, Task};
-use mra::config::{AgentConfig, RuntimeConfig};
+use mra::agent::{AgentBehavior, AgentCtx, AgentHandle, AgentReply, Task};
+use mra::config::AgentConfig;
 use mra::error::AgentError;
 use mra::runtime::SwarmRuntime;
+use mra::supervisor::{ChildContext, ChildSpec, SpawnedChild, SupervisorConfig};
 
 struct EchoBehavior;
 
@@ -18,17 +21,35 @@ impl AgentBehavior for EchoBehavior {
     }
 }
 
+fn echo_spec(name: &str) -> ChildSpec {
+    let agent_name = name.to_string();
+    ChildSpec::new(
+        name,
+        AgentConfig::new(name),
+        Arc::new(move |ctx: ChildContext| {
+            let agent_name = agent_name.clone();
+            Box::pin(async move {
+                Ok(AgentHandle::spawn_child(
+                    ctx.id,
+                    AgentConfig::new(&agent_name),
+                    EchoBehavior,
+                    ctx.peers,
+                    ctx.llm,
+                    ctx.cancel,
+                ))
+            })
+                as Pin<
+                    Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>,
+                >
+        }),
+    )
+}
+
 #[tokio::test]
 async fn test_runtime_spawn_and_execute() {
-    let mut runtime = SwarmRuntime::new(RuntimeConfig::default());
+    let runtime = SwarmRuntime::new(SupervisorConfig::default());
 
-    let handle = runtime.spawn(
-        "echo",
-        AgentConfig::new("echo"),
-        EchoBehavior,
-        HashMap::new(),
-        None,
-    );
+    let handle = runtime.spawn(echo_spec("echo")).await.unwrap();
 
     let reply = handle.execute(Task::new("ping")).await.unwrap();
     assert_eq!(reply.output, "ping");
@@ -38,57 +59,24 @@ async fn test_runtime_spawn_and_execute() {
 
 #[tokio::test]
 async fn test_runtime_shutdown_completes() {
-    let mut runtime = SwarmRuntime::new(RuntimeConfig::default());
-    runtime.spawn(
-        "a",
-        AgentConfig::new("a"),
-        EchoBehavior,
-        HashMap::new(),
-        None,
-    );
-    runtime.spawn(
-        "b",
-        AgentConfig::new("b"),
-        EchoBehavior,
-        HashMap::new(),
-        None,
-    );
+    let runtime = SwarmRuntime::new(SupervisorConfig::default());
+    runtime.spawn(echo_spec("a")).await.unwrap();
+    runtime.spawn(echo_spec("b")).await.unwrap();
 
     let result = tokio::time::timeout(Duration::from_secs(5), runtime.shutdown()).await;
     assert!(result.is_ok(), "shutdown should complete within timeout");
 }
 
 #[tokio::test]
-async fn test_runtime_get_handle_by_id() {
-    let mut runtime = SwarmRuntime::new(RuntimeConfig::default());
-    let handle = runtime.spawn(
-        "echo",
-        AgentConfig::new("echo"),
-        EchoBehavior,
-        HashMap::new(),
-        None,
-    );
-    let id = handle.id();
-
-    let looked_up = runtime.get_handle(id);
-    assert!(looked_up.is_some());
-    assert_eq!(looked_up.unwrap().id(), id);
-}
-
-#[tokio::test]
 async fn test_runtime_get_handle_by_name() {
-    let mut runtime = SwarmRuntime::new(RuntimeConfig::default());
-    runtime.spawn(
-        "echo",
-        AgentConfig::new("echo"),
-        EchoBehavior,
-        HashMap::new(),
-        None,
-    );
+    let runtime = SwarmRuntime::new(SupervisorConfig::default());
+    runtime.spawn(echo_spec("echo")).await.unwrap();
 
-    let looked_up = runtime.get_handle_by_name("echo");
+    let looked_up = runtime.get_handle_by_name("echo").await;
     assert!(looked_up.is_some());
 
-    let missing = runtime.get_handle_by_name("nonexistent");
+    let missing = runtime.get_handle_by_name("nonexistent").await;
     assert!(missing.is_none());
+
+    runtime.shutdown().await;
 }

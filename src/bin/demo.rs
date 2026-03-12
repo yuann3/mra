@@ -9,13 +9,16 @@
 //! Requires `mra.toml` or `MRA_LLM__API_KEY` env var.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
-use mra::agent::{AgentBehavior, AgentCtx, AgentReply, Task};
+use mra::agent::{AgentBehavior, AgentCtx, AgentHandle, AgentReply, Task};
 use mra::config::{AgentConfig, MraConfig};
 use mra::error::AgentError;
 use mra::llm::{ChatMessage, LlmProvider, LlmRequest, OpenRouterClient, Role};
 use mra::runtime::SwarmRuntime;
+use mra::supervisor::{ChildContext, ChildSpec, SpawnedChild, SupervisorConfig};
 
 const RESEARCHER_SYSTEM: &str = "\
 You are a research assistant. Given a topic, produce concise research \
@@ -150,36 +153,81 @@ async fn main() -> anyhow::Result<()> {
         config.llm.model.clone(),
     ));
 
-    let mut runtime = SwarmRuntime::new(config.runtime_config());
+    let runtime = SwarmRuntime::new(SupervisorConfig::default());
 
-    // Spawn bottom-up: editor (no peers) → writer → researcher
-    let editor_handle = runtime.spawn(
+    // Editor (no peers)
+    let llm_c = llm.clone();
+    let editor_spec = ChildSpec::new(
         "editor",
         AgentConfig::new("editor"),
-        Editor,
-        HashMap::new(),
-        Some(llm.clone()),
+        Arc::new(move |ctx: ChildContext| {
+            let llm = llm_c.clone();
+            Box::pin(async move {
+                Ok(AgentHandle::spawn_child(
+                    ctx.id,
+                    AgentConfig::new("editor"),
+                    Editor,
+                    HashMap::new(),
+                    Some(llm),
+                    ctx.cancel,
+                ))
+            })
+                as Pin<Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>>
+        }),
     );
+    let editor_handle = runtime.spawn(editor_spec).await?;
 
-    let mut writer_peers = HashMap::new();
-    writer_peers.insert("editor".into(), editor_handle);
-    let writer_handle = runtime.spawn(
+    // Writer (peers: editor)
+    let llm_c = llm.clone();
+    let eh = editor_handle.clone();
+    let writer_spec = ChildSpec::new(
         "writer",
         AgentConfig::new("writer"),
-        Writer,
-        writer_peers,
-        Some(llm.clone()),
+        Arc::new(move |ctx: ChildContext| {
+            let llm = llm_c.clone();
+            let editor = eh.clone();
+            Box::pin(async move {
+                let mut peers = HashMap::new();
+                peers.insert("editor".into(), editor);
+                Ok(AgentHandle::spawn_child(
+                    ctx.id,
+                    AgentConfig::new("writer"),
+                    Writer,
+                    peers,
+                    Some(llm),
+                    ctx.cancel,
+                ))
+            })
+                as Pin<Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>>
+        }),
     );
+    let writer_handle = runtime.spawn(writer_spec).await?;
 
-    let mut researcher_peers = HashMap::new();
-    researcher_peers.insert("writer".into(), writer_handle);
-    runtime.spawn(
+    // Researcher (peers: writer)
+    let llm_c = llm.clone();
+    let wh = writer_handle.clone();
+    let researcher_spec = ChildSpec::new(
         "researcher",
         AgentConfig::new("researcher"),
-        Researcher,
-        researcher_peers,
-        Some(llm),
+        Arc::new(move |ctx: ChildContext| {
+            let llm = llm_c.clone();
+            let writer = wh.clone();
+            Box::pin(async move {
+                let mut peers = HashMap::new();
+                peers.insert("writer".into(), writer);
+                Ok(AgentHandle::spawn_child(
+                    ctx.id,
+                    AgentConfig::new("researcher"),
+                    Researcher,
+                    peers,
+                    Some(llm),
+                    ctx.cancel,
+                ))
+            })
+                as Pin<Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>>
+        }),
     );
+    runtime.spawn(researcher_spec).await?;
 
     let topic = std::env::args()
         .nth(1)
@@ -188,7 +236,7 @@ async fn main() -> anyhow::Result<()> {
     println!("📚 Submitting topic: {topic}");
     println!("🔄 Pipeline: researcher → writer → editor\n");
 
-    let researcher = runtime.get_handle_by_name("researcher").unwrap();
+    let researcher = runtime.get_handle_by_name("researcher").await.unwrap();
     let reply = researcher.execute(Task::new(&topic)).await?;
 
     println!("✅ Final output ({} tokens used):\n", reply.tokens_used);
