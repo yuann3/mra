@@ -1,24 +1,32 @@
 //! Research pipeline demo: researcher → writer → editor.
 //!
-//! Three agents form a sequential pipeline. Each calls the LLM via
-//! OpenRouter, then delegates to the next agent in the chain.
+//! Three agents form a sequential pipeline under an Erlang-style
+//! supervisor. Each calls the LLM via OpenRouter, then delegates to
+//! the next agent in the chain.
+//!
+//! The supervisor automatically:
+//! - Injects peer handles so agents can find each other by name
+//! - Monitors agents for hangs and restarts them if needed
+//! - Emits lifecycle events (started, exited, restarted, hang detected)
 //!
 //! Usage:
 //!   cargo run --bin demo "your topic here"
 //!
 //! Requires `mra.toml` or `MRA_LLM__API_KEY` env var.
 
-use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use mra::agent::{AgentBehavior, AgentCtx, AgentHandle, AgentReply, Task};
 use mra::config::{AgentConfig, MraConfig};
 use mra::error::AgentError;
 use mra::llm::{ChatMessage, LlmProvider, LlmRequest, OpenRouterClient, Role};
 use mra::runtime::SwarmRuntime;
-use mra::supervisor::{ChildContext, ChildSpec, SpawnedChild, SupervisorConfig};
+use mra::supervisor::{
+    ChildContext, ChildRestart, ChildSpec, SpawnedChild, SupervisorConfig, SupervisorEvent,
+};
 
 const RESEARCHER_SYSTEM: &str = "\
 You are a research assistant. Given a topic, produce concise research \
@@ -58,6 +66,7 @@ impl AgentBehavior for Researcher {
         let response = llm.chat(&request).await.map_err(AgentError::Llm)?;
         let tokens = response.total_tokens();
 
+        // Peers are auto-injected by the supervisor — no manual wiring needed
         let writer = ctx.peers.get("writer").expect("writer peer not found");
         let writer_reply = writer.execute(Task::new(response.content)).await?;
 
@@ -140,6 +149,42 @@ impl AgentBehavior for Editor {
     }
 }
 
+/// Helper to build a ChildSpec that uses supervisor-injected peers and LLM.
+fn agent_spec<B: AgentBehavior>(
+    name: &str,
+    llm: Arc<dyn LlmProvider>,
+    behavior_fn: fn() -> B,
+) -> ChildSpec {
+    let agent_name = name.to_string();
+    ChildSpec::new(
+        name,
+        AgentConfig::new(name),
+        Arc::new(move |ctx: ChildContext| {
+            let llm = llm.clone();
+            let agent_name = agent_name.clone();
+            let behavior = behavior_fn();
+            Box::pin(async move {
+                Ok(AgentHandle::spawn_child(
+                    ctx.id,
+                    AgentConfig::new(&agent_name),
+                    behavior,
+                    ctx.peers, // Supervisor populates this with alive siblings
+                    Some(llm),
+                    ctx.cancel,
+                ))
+            })
+                as Pin<
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
+                >
+        }),
+    )
+    .with_restart(ChildRestart::Permanent)
+    .with_hang_timeout(Duration::from_secs(120))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -153,108 +198,84 @@ async fn main() -> anyhow::Result<()> {
         config.llm.model.clone(),
     ));
 
-    let runtime = SwarmRuntime::new(SupervisorConfig::default());
+    let sup_config = SupervisorConfig {
+        hang_check_interval: Duration::from_secs(5),
+        ..Default::default()
+    };
+    let runtime = SwarmRuntime::new(sup_config);
 
-    // Editor (no peers)
-    let llm_c = llm.clone();
-    let editor_spec = ChildSpec::new(
-        "editor",
-        AgentConfig::new("editor"),
-        Arc::new(move |ctx: ChildContext| {
-            let llm = llm_c.clone();
-            Box::pin(async move {
-                Ok(AgentHandle::spawn_child(
-                    ctx.id,
-                    AgentConfig::new("editor"),
-                    Editor,
-                    HashMap::new(),
-                    Some(llm),
-                    ctx.cancel,
-                ))
-            })
-                as Pin<
-                    Box<
-                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
-                            + Send,
-                    >,
-                >
-        }),
-    );
-    let editor_handle = runtime.spawn(editor_spec).await?;
+    // Subscribe to supervisor events and log them in the background
+    let mut events = runtime.subscribe();
+    tokio::spawn(async move {
+        while let Ok(event) = events.recv().await {
+            match event {
+                SupervisorEvent::SupervisorStarted => {
+                    println!("🟢 Supervisor started");
+                }
+                SupervisorEvent::ChildStarted { name, generation } => {
+                    println!("  ✅ Agent '{name}' started (gen {generation})");
+                }
+                SupervisorEvent::ChildExited {
+                    name, generation, ..
+                } => {
+                    println!("  ⛔ Agent '{name}' exited (gen {generation})");
+                }
+                SupervisorEvent::ChildRestarted {
+                    name,
+                    old_gen,
+                    new_gen,
+                    delay,
+                } => {
+                    println!(
+                        "  🔄 Agent '{name}' restarted: gen {old_gen} → {new_gen} (after {delay:?})"
+                    );
+                }
+                SupervisorEvent::HangDetected {
+                    name,
+                    generation,
+                    elapsed,
+                } => {
+                    println!(
+                        "  ⏳ Hang detected: '{name}' gen {generation} unresponsive for {elapsed:?}"
+                    );
+                }
+                SupervisorEvent::SupervisorStopping => {
+                    println!("🔴 Supervisor stopping...");
+                }
+                SupervisorEvent::ChildRestartLimitExceeded { name, restarts } => {
+                    println!("  ❌ Agent '{name}' restart limit exceeded ({restarts} restarts)");
+                }
+                SupervisorEvent::RestartIntensityExceeded { total_restarts } => {
+                    println!("  ❌ Global restart intensity exceeded ({total_restarts} restarts)");
+                }
+            }
+        }
+    });
 
-    // Writer (peers: editor)
-    let llm_c = llm.clone();
-    let eh = editor_handle.clone();
-    let writer_spec = ChildSpec::new(
-        "writer",
-        AgentConfig::new("writer"),
-        Arc::new(move |ctx: ChildContext| {
-            let llm = llm_c.clone();
-            let editor = eh.clone();
-            Box::pin(async move {
-                let mut peers = HashMap::new();
-                peers.insert("editor".into(), editor);
-                Ok(AgentHandle::spawn_child(
-                    ctx.id,
-                    AgentConfig::new("writer"),
-                    Writer,
-                    peers,
-                    Some(llm),
-                    ctx.cancel,
-                ))
-            })
-                as Pin<
-                    Box<
-                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
-                            + Send,
-                    >,
-                >
-        }),
-    );
-    let writer_handle = runtime.spawn(writer_spec).await?;
-
-    // Researcher (peers: writer)
-    let llm_c = llm.clone();
-    let wh = writer_handle.clone();
-    let researcher_spec = ChildSpec::new(
-        "researcher",
-        AgentConfig::new("researcher"),
-        Arc::new(move |ctx: ChildContext| {
-            let llm = llm_c.clone();
-            let writer = wh.clone();
-            Box::pin(async move {
-                let mut peers = HashMap::new();
-                peers.insert("writer".into(), writer);
-                Ok(AgentHandle::spawn_child(
-                    ctx.id,
-                    AgentConfig::new("researcher"),
-                    Researcher,
-                    peers,
-                    Some(llm),
-                    ctx.cancel,
-                ))
-            })
-                as Pin<
-                    Box<
-                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
-                            + Send,
-                    >,
-                >
-        }),
-    );
-    runtime.spawn(researcher_spec).await?;
+    // Spawn agents in dependency order (editor first, then writer, then researcher).
+    // The supervisor auto-injects peer handles — each agent can see its
+    // already-started siblings via ctx.peers.
+    runtime
+        .spawn(agent_spec("editor", llm.clone(), || Editor))
+        .await?;
+    runtime
+        .spawn(agent_spec("writer", llm.clone(), || Writer))
+        .await?;
+    runtime
+        .spawn(agent_spec("researcher", llm.clone(), || Researcher))
+        .await?;
 
     let topic = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "the history of the Rust programming language".into());
 
-    println!("📚 Submitting topic: {topic}");
+    println!("\n📚 Submitting topic: {topic}");
     println!("🔄 Pipeline: researcher → writer → editor\n");
 
     let researcher = runtime.get_handle_by_name("researcher").await.unwrap();
     let reply = researcher.execute(Task::new(&topic)).await?;
 
-    println!("✅ Final output ({} tokens used):\n", reply.tokens_used);
+    println!("\n✅ Final output ({} tokens used):\n", reply.tokens_used);
     println!("{}", reply.output);
 
     runtime.shutdown().await;
