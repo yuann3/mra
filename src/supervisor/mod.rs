@@ -1,10 +1,12 @@
 //! Supervisor system — Erlang/OTP-style agent lifecycle management.
 
+pub(crate) mod child;
 mod config;
 mod event;
 #[allow(dead_code)]
 pub(crate) mod tracker;
 
+pub use child::{ChildContext, ChildFactory, ChildSpec, SpawnedChild};
 pub use config::{ChildRestart, RestartIntensity, ShutdownPolicy, Strategy, SupervisorConfig};
 pub use event::SupervisorEvent;
 

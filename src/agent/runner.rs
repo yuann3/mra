@@ -10,6 +10,7 @@ use crate::error::AgentError;
 use crate::ids::AgentId;
 use crate::llm::LlmProvider;
 use crate::supervisor::ChildExit;
+use crate::supervisor::child::SpawnedChild;
 
 use super::AgentBehavior;
 use super::ctx::AgentCtx;
@@ -171,6 +172,45 @@ impl AgentHandle {
             handle,
             progress: progress_rx,
             join,
+        }
+    }
+
+    /// Creates an agent without spawning a Tokio task.
+    ///
+    /// Returns a [`SpawnedChild`] whose future the supervisor will spawn
+    /// via its own `JoinSet`, giving it full control over task lifecycle.
+    pub fn spawn_child<B: AgentBehavior>(
+        id: AgentId,
+        config: AgentConfig,
+        behavior: B,
+        peers: HashMap<String, AgentHandle>,
+        llm: Option<Arc<dyn LlmProvider>>,
+        cancel: CancellationToken,
+    ) -> SpawnedChild {
+        let (tx, rx) = mpsc::channel(config.mailbox_size);
+        let (progress_tx, progress_rx) = watch::channel(ProgressState {
+            last_progress: tokio::time::Instant::now(),
+            busy: false,
+        });
+
+        let ctx = AgentCtx {
+            id,
+            peers,
+            llm,
+            progress_tx,
+        };
+
+        let runner = AgentRunner {
+            receiver: rx,
+            behavior,
+            ctx,
+            cancel,
+        };
+
+        SpawnedChild {
+            future: Box::pin(runner.run()),
+            progress: progress_rx,
+            sender: tx,
         }
     }
 }
