@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use crate::config::RestartPolicy;
 use super::config::RestartIntensity;
+use crate::config::RestartPolicy;
 
 pub(crate) struct RestartTracker {
     timestamps: VecDeque<Instant>,

@@ -39,7 +39,10 @@ fn echo_spec(name: &str) -> ChildSpec {
                 ))
             })
                 as Pin<
-                    Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>,
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
                 >
         }),
     )

@@ -22,8 +22,8 @@ use crate::error::AgentError;
 
 pub use ctx::AgentCtx;
 pub use handle::AgentHandle;
-pub use message::{AgentReply, Task};
 pub(crate) use message::AgentMessage;
+pub use message::{AgentReply, Task};
 pub use runner::{ProgressState, SpawnedAgent};
 
 /// Defines how an agent processes incoming [`Task`]s.

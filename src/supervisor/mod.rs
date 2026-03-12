@@ -5,7 +5,6 @@ mod config;
 mod event;
 mod handle;
 pub(crate) mod runner;
-#[allow(dead_code)]
 pub(crate) mod tracker;
 
 pub use child::{ChildContext, ChildFactory, ChildSpec, SpawnedChild};

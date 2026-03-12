@@ -21,7 +21,6 @@ impl MailboxSlot {
     }
 
     /// Atomically replaces the inner sender.
-    #[allow(dead_code)]
     pub(crate) fn swap(&self, new_sender: mpsc::Sender<AgentMessage>) {
         self.sender.store(Arc::new(new_sender));
     }

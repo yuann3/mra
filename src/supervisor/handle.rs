@@ -37,7 +37,10 @@ impl SupervisorHandle {
         let (event_tx, _) = broadcast::channel(config.event_capacity);
         let runner = SupervisorRunner::new(config, command_rx, event_tx.clone());
         let join = tokio::spawn(runner.run());
-        let handle = Self { command_tx, event_tx };
+        let handle = Self {
+            command_tx,
+            event_tx,
+        };
         (handle, join)
     }
 

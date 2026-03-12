@@ -39,7 +39,6 @@ pub struct ChildContext {
 /// the progress watch receiver, and the mpsc sender for the mailbox.
 ///
 /// Constructed via [`AgentHandle::spawn_child`] — not directly by user code.
-#[allow(dead_code)]
 pub struct SpawnedChild {
     /// The agent's run future. Supervisor spawns this in its `JoinSet`.
     pub(crate) future: Pin<Box<dyn Future<Output = ChildExit> + Send>>,
@@ -54,7 +53,9 @@ pub struct SpawnedChild {
 ///
 /// Called by the supervisor on initial start and on each restart.
 pub type ChildFactory = Arc<
-    dyn Fn(ChildContext) -> Pin<Box<dyn Future<Output = Result<SpawnedChild, SupervisorError>> + Send>>
+    dyn Fn(
+            ChildContext,
+        ) -> Pin<Box<dyn Future<Output = Result<SpawnedChild, SupervisorError>> + Send>>
         + Send
         + Sync,
 >;

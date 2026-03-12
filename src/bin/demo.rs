@@ -172,7 +172,12 @@ async fn main() -> anyhow::Result<()> {
                     ctx.cancel,
                 ))
             })
-                as Pin<Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>>
+                as Pin<
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
+                >
         }),
     );
     let editor_handle = runtime.spawn(editor_spec).await?;
@@ -198,7 +203,12 @@ async fn main() -> anyhow::Result<()> {
                     ctx.cancel,
                 ))
             })
-                as Pin<Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>>
+                as Pin<
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
+                >
         }),
     );
     let writer_handle = runtime.spawn(writer_spec).await?;
@@ -224,7 +234,12 @@ async fn main() -> anyhow::Result<()> {
                     ctx.cancel,
                 ))
             })
-                as Pin<Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>>
+                as Pin<
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
+                >
         }),
     );
     runtime.spawn(researcher_spec).await?;

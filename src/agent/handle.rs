@@ -23,12 +23,12 @@ pub struct AgentHandle {
 }
 
 impl AgentHandle {
-    pub(crate) fn new(
-        id: AgentId,
-        mailbox: Arc<MailboxSlot>,
-        cancel: CancellationToken,
-    ) -> Self {
-        Self { id, mailbox, cancel }
+    pub(crate) fn new(id: AgentId, mailbox: Arc<MailboxSlot>, cancel: CancellationToken) -> Self {
+        Self {
+            id,
+            mailbox,
+            cancel,
+        }
     }
 
     /// Returns this agent's unique identifier.

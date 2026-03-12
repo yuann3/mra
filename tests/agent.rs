@@ -41,7 +41,14 @@ async fn test_agent_execute() {
     let config = AgentConfig::new("echo");
     let cancel = CancellationToken::new();
 
-    let spawned = AgentHandle::spawn(AgentId::new(), config, EchoBehavior, HashMap::new(), None, cancel);
+    let spawned = AgentHandle::spawn(
+        AgentId::new(),
+        config,
+        EchoBehavior,
+        HashMap::new(),
+        None,
+        cancel,
+    );
 
     let task = Task::new("hello world");
     let reply = spawned.handle.execute(task).await.unwrap();
@@ -56,7 +63,14 @@ async fn test_agent_shutdown() {
     let config = AgentConfig::new("echo");
     let cancel = CancellationToken::new();
 
-    let spawned = AgentHandle::spawn(AgentId::new(), config, EchoBehavior, HashMap::new(), None, cancel);
+    let spawned = AgentHandle::spawn(
+        AgentId::new(),
+        config,
+        EchoBehavior,
+        HashMap::new(),
+        None,
+        cancel,
+    );
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     spawned.handle.shutdown(deadline).await;
@@ -71,7 +85,14 @@ async fn test_agent_cancel() {
     let config = AgentConfig::new("echo");
     let cancel = CancellationToken::new();
 
-    let spawned = AgentHandle::spawn(AgentId::new(), config, EchoBehavior, HashMap::new(), None, cancel);
+    let spawned = AgentHandle::spawn(
+        AgentId::new(),
+        config,
+        EchoBehavior,
+        HashMap::new(),
+        None,
+        cancel,
+    );
 
     spawned.handle.cancel();
 
@@ -162,7 +183,14 @@ async fn test_agent_execute_after_channel_closed() {
     let config = AgentConfig::new("echo");
     let cancel = CancellationToken::new();
 
-    let spawned = AgentHandle::spawn(AgentId::new(), config, EchoBehavior, HashMap::new(), None, cancel);
+    let spawned = AgentHandle::spawn(
+        AgentId::new(),
+        config,
+        EchoBehavior,
+        HashMap::new(),
+        None,
+        cancel,
+    );
 
     // Cancel the agent so it stops
     spawned.handle.cancel();
@@ -259,7 +287,14 @@ async fn test_agent_report_progress() {
 
     let config = AgentConfig::new("progress");
     let cancel = CancellationToken::new();
-    let spawned = AgentHandle::spawn(AgentId::new(), config, ProgressBehavior, HashMap::new(), None, cancel);
+    let spawned = AgentHandle::spawn(
+        AgentId::new(),
+        config,
+        ProgressBehavior,
+        HashMap::new(),
+        None,
+        cancel,
+    );
 
     let handle = spawned.handle.clone();
     let task_handle = tokio::spawn(async move { handle.execute(Task::new("work")).await });

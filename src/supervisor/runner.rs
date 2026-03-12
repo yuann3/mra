@@ -6,20 +6,19 @@ use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use crate::agent::mailbox::MailboxSlot;
 use crate::agent::AgentHandle;
 use crate::agent::ProgressState;
+use crate::agent::mailbox::MailboxSlot;
 use crate::error::SupervisorError;
 use crate::ids::AgentId;
 
+use super::ChildExit;
 use super::child::{ChildContext, ChildSpec};
 use super::config::{ChildRestart, Strategy, SupervisorConfig};
 use super::event::SupervisorEvent;
 use super::handle::SupervisorCommand;
 use super::tracker::{IntensityTracker, RestartTracker};
-use super::ChildExit;
 
-#[allow(dead_code)]
 struct ChildState {
     spec: ChildSpec,
     id: AgentId,
@@ -32,7 +31,6 @@ struct ChildState {
     alive: bool,
 }
 
-#[allow(dead_code)]
 pub(crate) struct SupervisorRunner {
     config: SupervisorConfig,
     children: HashMap<String, ChildState>,
@@ -252,10 +250,9 @@ impl SupervisorRunner {
 
                 if child.tracker.exceeded() {
                     let restarts = child.tracker.total_restarts;
-                    let _ = self.event_tx.send(SupervisorEvent::ChildRestartLimitExceeded {
-                        name,
-                        restarts,
-                    });
+                    let _ = self
+                        .event_tx
+                        .send(SupervisorEvent::ChildRestartLimitExceeded { name, restarts });
                     return Ok(());
                 }
 

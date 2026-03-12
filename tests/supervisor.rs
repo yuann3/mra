@@ -88,7 +88,10 @@ fn child_spec_with_defaults() {
                 ))
             })
                 as Pin<
-                    Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>,
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
                 >
         }),
     );
@@ -130,7 +133,10 @@ fn child_spec_builder_methods() {
                 ))
             })
                 as Pin<
-                    Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>,
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
                 >
         }),
     )
@@ -150,11 +156,7 @@ fn child_spec_builder_methods() {
 
 struct EchoBehavior;
 impl AgentBehavior for EchoBehavior {
-    async fn handle(
-        &mut self,
-        _ctx: &mut AgentCtx,
-        input: Task,
-    ) -> Result<AgentReply, AgentError> {
+    async fn handle(&mut self, _ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
         Ok(AgentReply {
             task_id: input.id,
             output: input.instruction.clone(),
@@ -272,9 +274,9 @@ async fn test_supervisor_restarts_crashed_transient_child() {
                 count.fetch_add(1, Ordering::SeqCst);
 
                 if generation < 2 {
-                    Ok(SpawnedChild::from_future(
-                        Box::pin(async { ChildExit::Failed("crash".into()) }),
-                    ))
+                    Ok(SpawnedChild::from_future(Box::pin(async {
+                        ChildExit::Failed("crash".into())
+                    })))
                 } else {
                     Ok(AgentHandle::spawn_child(
                         ctx.id,
@@ -287,7 +289,10 @@ async fn test_supervisor_restarts_crashed_transient_child() {
                 }
             })
                 as Pin<
-                    Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>,
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
                 >
         }),
     );
@@ -327,12 +332,15 @@ async fn test_supervisor_temporary_child_not_restarted() {
             let count = count.clone();
             Box::pin(async move {
                 count.fetch_add(1, Ordering::SeqCst);
-                Ok(SpawnedChild::from_future(
-                    Box::pin(async { ChildExit::Failed("crash".into()) }),
-                ))
+                Ok(SpawnedChild::from_future(Box::pin(async {
+                    ChildExit::Failed("crash".into())
+                })))
             })
                 as Pin<
-                    Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>,
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
                 >
         }),
     )
@@ -364,12 +372,15 @@ async fn test_supervisor_transient_child_not_restarted_on_normal_exit() {
             let count = count.clone();
             Box::pin(async move {
                 count.fetch_add(1, Ordering::SeqCst);
-                Ok(SpawnedChild::from_future(
-                    Box::pin(async { ChildExit::Normal }),
-                ))
+                Ok(SpawnedChild::from_future(Box::pin(async {
+                    ChildExit::Normal
+                })))
             })
                 as Pin<
-                    Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>,
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
                 >
         }),
     );
@@ -428,7 +439,12 @@ async fn test_supervisor_one_for_all_restarts_all_children() {
                     ctx.cancel,
                 ))
             })
-                as Pin<Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>>
+                as Pin<
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
+                >
         }),
     );
 
@@ -442,9 +458,9 @@ async fn test_supervisor_one_for_all_restarts_all_children() {
                 b_c.fetch_add(1, Ordering::SeqCst);
                 // First start: fail immediately to trigger OneForAll
                 if ctx.generation == 0 {
-                    Ok(SpawnedChild::from_future(
-                        Box::pin(async { ChildExit::Failed("crash".into()) }),
-                    ))
+                    Ok(SpawnedChild::from_future(Box::pin(async {
+                        ChildExit::Failed("crash".into())
+                    })))
                 } else {
                     Ok(AgentHandle::spawn_child(
                         ctx.id,
@@ -456,7 +472,12 @@ async fn test_supervisor_one_for_all_restarts_all_children() {
                     ))
                 }
             })
-                as Pin<Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>>
+                as Pin<
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
+                >
         }),
     );
 
@@ -530,7 +551,12 @@ async fn test_supervisor_detects_hung_agent() {
                     ctx.cancel,
                 ))
             })
-                as Pin<Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>>
+                as Pin<
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
+                >
         }),
     )
     .with_hang_timeout(Duration::from_millis(100));
