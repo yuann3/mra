@@ -29,6 +29,7 @@ struct ChildState {
     logical_cancel: CancellationToken,
     tracker: RestartTracker,
     alive: bool,
+    hung: bool,
 }
 
 pub(crate) struct SupervisorRunner {
@@ -71,8 +72,6 @@ impl SupervisorRunner {
 
         loop {
             tokio::select! {
-                biased;
-
                 _ = self.cancel.cancelled() => {
                     self.drain_all().await;
                     break Ok(());
@@ -139,12 +138,25 @@ impl SupervisorRunner {
         let (dummy_tx, _) = mpsc::channel(1);
         let mailbox = Arc::new(MailboxSlot::new(dummy_tx));
 
+        // Build peers map from existing alive children
+        let peers: HashMap<String, AgentHandle> = self
+            .children
+            .iter()
+            .filter(|(_, c)| c.alive)
+            .map(|(n, c)| {
+                (
+                    n.clone(),
+                    AgentHandle::new(c.id, c.mailbox.clone(), c.logical_cancel.clone()),
+                )
+            })
+            .collect();
+
         // Call factory
         let ctx = ChildContext {
             id,
             generation: 0,
             cancel: child_cancel.clone(),
-            peers: HashMap::new(),
+            peers,
             llm: None,
         };
         let spawned = (spec.factory)(ctx)
@@ -174,6 +186,7 @@ impl SupervisorRunner {
             logical_cancel,
             tracker,
             alive: true,
+            hung: false,
         };
 
         self.children.insert(name.clone(), state);
@@ -226,7 +239,14 @@ impl SupervisorRunner {
             child.child_cancel = None;
             child.progress = None;
 
-            let is_failure = exit.is_failure();
+            // Hung children exit with Shutdown, which isn't a "failure" —
+            // override so Transient restart policy still kicks in.
+            let is_failure = if child.hung {
+                child.hung = false;
+                true
+            } else {
+                exit.is_failure()
+            };
             let should_restart = child.spec.restart.should_restart(is_failure);
             (old_gen, should_restart)
         };
@@ -263,6 +283,7 @@ impl SupervisorRunner {
                     let _ = self
                         .event_tx
                         .send(SupervisorEvent::RestartIntensityExceeded { total_restarts });
+                    self.drain_all().await;
                     return Err(SupervisorError::RestartIntensityExceeded { total_restarts });
                 }
 
@@ -276,6 +297,19 @@ impl SupervisorRunner {
                     return Ok(());
                 }
 
+                // Build peers map from alive siblings
+                let peers: HashMap<String, AgentHandle> = self
+                    .children
+                    .iter()
+                    .filter(|(n, c)| c.alive && *n != &name)
+                    .map(|(n, c)| {
+                        (
+                            n.clone(),
+                            AgentHandle::new(c.id, c.mailbox.clone(), c.logical_cancel.clone()),
+                        )
+                    })
+                    .collect();
+
                 let child = self.children.get_mut(&name).unwrap();
 
                 // Increment generation and create new per-generation cancel token
@@ -286,7 +320,7 @@ impl SupervisorRunner {
                     id: child.id,
                     generation: new_gen,
                     cancel: child_cancel.clone(),
-                    peers: HashMap::new(),
+                    peers,
                     llm: None,
                 };
 
@@ -351,6 +385,7 @@ impl SupervisorRunner {
                 .send(SupervisorEvent::RestartIntensityExceeded {
                     total_restarts: total,
                 });
+            self.drain_all().await;
             return Err(SupervisorError::RestartIntensityExceeded {
                 total_restarts: total,
             });
@@ -359,27 +394,46 @@ impl SupervisorRunner {
         // 4. Respawn all non-Temporary children in insertion order
         let order = self.child_order.clone();
         for child_name in &order {
-            let child = self.children.get_mut(child_name).unwrap();
-
             // Skip Temporary children
-            if matches!(child.spec.restart, ChildRestart::Temporary) {
-                child.alive = false;
-                continue;
+            {
+                let child = self.children.get_mut(child_name).unwrap();
+                if matches!(child.spec.restart, ChildRestart::Temporary) {
+                    child.alive = false;
+                    continue;
+                }
             }
 
             if self.cancel.is_cancelled() {
                 return Ok(());
             }
 
-            let old_gen = child.generation;
-            let new_gen = old_gen + 1;
-            let child_cancel = child.logical_cancel.child_token();
+            let (old_gen, new_gen, child_cancel, child_id) = {
+                let child = self.children.get(child_name).unwrap();
+                let old_gen = child.generation;
+                let new_gen = old_gen + 1;
+                let child_cancel = child.logical_cancel.child_token();
+                (old_gen, new_gen, child_cancel, child.id)
+            };
 
+            // Build peers from already-respawned siblings
+            let peers: HashMap<String, AgentHandle> = self
+                .children
+                .iter()
+                .filter(|(n, c)| c.alive && *n != child_name)
+                .map(|(n, c)| {
+                    (
+                        n.clone(),
+                        AgentHandle::new(c.id, c.mailbox.clone(), c.logical_cancel.clone()),
+                    )
+                })
+                .collect();
+
+            let child = self.children.get_mut(child_name).unwrap();
             let ctx = ChildContext {
-                id: child.id,
+                id: child_id,
                 generation: new_gen,
                 cancel: child_cancel.clone(),
-                peers: HashMap::new(),
+                peers,
                 llm: None,
             };
 
@@ -453,6 +507,7 @@ impl SupervisorRunner {
             if let Some(child) = self.children.get_mut(&name)
                 && let Some(cancel) = child.child_cancel.take()
             {
+                child.hung = true;
                 cancel.cancel();
             }
         }

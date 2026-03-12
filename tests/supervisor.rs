@@ -572,19 +572,30 @@ async fn test_supervisor_detects_hung_agent() {
         let _ = h.execute(Task::new("hang forever")).await;
     });
 
-    // Wait for hang detection
+    // Wait for hang detection and subsequent restart
     let mut found_hang = false;
-    for _ in 0..30 {
+    let mut found_restart = false;
+    for _ in 0..50 {
         match tokio::time::timeout(Duration::from_millis(200), events.recv()).await {
             Ok(Ok(SupervisorEvent::HangDetected { .. })) => {
                 found_hang = true;
-                break;
+            }
+            Ok(Ok(SupervisorEvent::ChildRestarted { .. }))
+            | Ok(Ok(SupervisorEvent::ChildStarted { .. })) => {
+                if found_hang {
+                    found_restart = true;
+                    break;
+                }
             }
             Ok(Ok(_)) => continue,
             _ => continue,
         }
     }
     assert!(found_hang, "should detect hung agent");
+    assert!(
+        found_restart,
+        "hung agent should be restarted after hang detection"
+    );
 
     handle.shutdown().await;
     let _ = join.await;

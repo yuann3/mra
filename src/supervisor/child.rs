@@ -52,6 +52,13 @@ pub struct SpawnedChild {
 /// Async, fallible factory that produces a [`SpawnedChild`].
 ///
 /// Called by the supervisor on initial start and on each restart.
+///
+/// # Deadlock warning
+///
+/// The factory runs **inside** the supervisor's event loop. It **must not**
+/// call back into the supervisor (e.g. `supervisor.child()` or
+/// `supervisor.start_child()`) — doing so will deadlock because the
+/// supervisor cannot process commands while it is awaiting the factory.
 pub type ChildFactory = Arc<
     dyn Fn(
             ChildContext,
@@ -99,6 +106,11 @@ impl ChildSpec {
     /// Creates a new `ChildSpec` with sensible defaults.
     ///
     /// Defaults: `Transient` restart, 5-second shutdown grace, no hang timeout.
+    ///
+    /// # Deadlock warning
+    ///
+    /// The `factory` closure runs inside the supervisor's event loop and
+    /// **must not** call back into the supervisor. See [`ChildFactory`] docs.
     pub fn new(name: impl Into<String>, config: AgentConfig, factory: ChildFactory) -> Self {
         Self {
             name: name.into(),
