@@ -402,6 +402,93 @@ async fn test_supervisor_child_lookup() {
     let _ = join.await;
 }
 
+// --- Task 10: OneForAll restart strategy ---
+
+#[tokio::test]
+async fn test_supervisor_one_for_all_restarts_all_children() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let a_count = Arc::new(AtomicU32::new(0));
+    let b_count = Arc::new(AtomicU32::new(0));
+
+    let a_c = a_count.clone();
+    let spec_a = ChildSpec::new(
+        "a",
+        AgentConfig::new("a"),
+        Arc::new(move |ctx: ChildContext| {
+            let a_c = a_c.clone();
+            Box::pin(async move {
+                a_c.fetch_add(1, Ordering::SeqCst);
+                Ok(AgentHandle::spawn_child(
+                    ctx.id,
+                    AgentConfig::new("a"),
+                    EchoBehavior,
+                    ctx.peers,
+                    ctx.llm,
+                    ctx.cancel,
+                ))
+            })
+                as Pin<Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>>
+        }),
+    );
+
+    let b_c = b_count.clone();
+    let spec_b = ChildSpec::new(
+        "b",
+        AgentConfig::new("b"),
+        Arc::new(move |ctx: ChildContext| {
+            let b_c = b_c.clone();
+            Box::pin(async move {
+                b_c.fetch_add(1, Ordering::SeqCst);
+                // First start: fail immediately to trigger OneForAll
+                if ctx.generation == 0 {
+                    Ok(SpawnedChild::from_future(
+                        Box::pin(async { ChildExit::Failed("crash".into()) }),
+                    ))
+                } else {
+                    Ok(AgentHandle::spawn_child(
+                        ctx.id,
+                        AgentConfig::new("b"),
+                        EchoBehavior,
+                        ctx.peers,
+                        ctx.llm,
+                        ctx.cancel,
+                    ))
+                }
+            })
+                as Pin<Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>>
+        }),
+    );
+
+    let config = SupervisorConfig {
+        strategy: Strategy::OneForAll,
+        ..Default::default()
+    };
+    let (handle, join) = SupervisorHandle::start(config);
+
+    // Start "a" first (healthy), then "b" (will crash immediately)
+    handle.start_child(spec_a).await.unwrap();
+    handle.start_child(spec_b).await.unwrap();
+
+    // Wait for the crash + OneForAll restart
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Both should have been started at least 2 times (initial + restart)
+    assert!(
+        a_count.load(Ordering::SeqCst) >= 2,
+        "expected a started >= 2 times, got {}",
+        a_count.load(Ordering::SeqCst),
+    );
+    assert!(
+        b_count.load(Ordering::SeqCst) >= 2,
+        "expected b started >= 2 times, got {}",
+        b_count.load(Ordering::SeqCst),
+    );
+
+    handle.shutdown().await;
+    let _ = join.await;
+}
+
 // --- Task 11: Hang detection via ProgressState polling ---
 
 #[tokio::test]
