@@ -1,18 +1,18 @@
 # mra
 
-> **⚠️ Super early stage / WIP.** Everything here works but the API will change. Don't build anything serious on this yet.
+> **WIP.** The API will change. Don't depend on this yet.
 
-A multi-agent runtime for Rust. Spawn AI agents as lightweight Tokio actors, wire them together, and let them talk to LLMs — all under an Erlang-style supervisor that keeps things running.
+Tokio actors for LLM agents, with an Erlang-style supervisor to restart them when they break.
 
 ## What is this?
 
-mra gives you an actor-based system where each agent gets its own async task, a bounded mailbox, and can call other agents or LLMs. Think of it as "what if Erlang/OTP supervisors, but for LLM pipelines, and in Rust."
+Each agent runs as its own async task with a bounded `mpsc` mailbox. Agents talk to each other through handles, call LLMs, and get restarted by a supervisor if they crash or stop responding. No shared mutable state.
 
-Agents communicate through typed channels with backpressure. No shared mutable state, no locks. The supervisor watches over your agents, restarts them when they crash, detects hangs, and auto-wires peer connections.
+If you've used Erlang/OTP, this is that idea applied to LLM pipelines, in Rust.
 
 ## Quick look
 
-Here's a 3-agent research pipeline. The researcher calls an LLM, passes results to a writer, who passes to an editor:
+A writer agent that calls an LLM, then passes the result to an editor agent:
 
 ```rust
 use mra::agent::{AgentBehavior, AgentCtx, AgentReply, Task};
@@ -38,7 +38,7 @@ impl AgentBehavior for Writer {
             max_tokens: Some(2048),
         }).await.map_err(AgentError::Llm)?;
 
-        // Delegate to the next agent — peers are auto-injected by the supervisor
+        // The supervisor injects peer handles automatically
         let editor = ctx.peers.get("editor").expect("editor peer");
         let reply = editor.execute(Task::new(response.content)).await?;
 
@@ -53,15 +53,23 @@ impl AgentBehavior for Writer {
 
 ## Supervision
 
-The supervisor is modeled after Erlang/OTP. It manages agent lifecycles with:
+The supervisor sits in a `select!` loop watching for three things: child exits, incoming commands, and hang-check ticks. When something goes wrong, it decides what to do based on the restart policy.
 
-- **Restart strategies**: `OneForOne` (restart just the crashed agent) or `OneForAll` (restart every agent when one crashes)
-- **Restart policies**: `Permanent` (always restart), `Transient` (restart only on failure), `Temporary` (never restart)
-- **Exponential backoff**: configurable base delay and max cap between restarts
-- **Restart intensity**: global rate limit — if too many restarts happen in a time window, the supervisor gives up
-- **Hang detection**: polls agent progress state and kills unresponsive agents
-- **Peer injection**: agents automatically receive handles to their siblings via `ctx.peers`
-- **Hot-swap mailbox**: `ArcSwap`-backed mailbox slot lets existing handles survive restarts — senders never need updating
+Restart strategies:
+- `OneForOne` -- restart the crashed agent only
+- `OneForAll` -- restart every agent when one crashes
+
+Restart policies per child:
+- `Permanent` -- always restart, regardless of how it exited
+- `Transient` -- restart only on failure (not normal exit)
+- `Temporary` -- never restart
+
+Other stuff the supervisor handles:
+- Exponential backoff between restarts (configurable base and cap)
+- A global restart intensity limit -- too many restarts in a window and it gives up
+- Hang detection by polling each agent's last-activity timestamp
+- Peer injection -- agents get handles to their siblings through `ctx.peers`
+- Hot-swap mailbox via `ArcSwap` -- when an agent restarts, existing handles keep working because the supervisor swaps the new channel sender into the same stable slot
 
 ```rust
 use mra::runtime::SwarmRuntime;
@@ -69,16 +77,13 @@ use mra::supervisor::{ChildSpec, ChildRestart, SupervisorConfig};
 
 let runtime = SwarmRuntime::new(SupervisorConfig::default());
 
-// Spawn agents in dependency order — supervisor auto-wires peers
-runtime.spawn(
-    agent_spec("editor", llm.clone(), || Editor)
-).await?;
-runtime.spawn(
-    agent_spec("writer", llm.clone(), || Writer)
-).await?;
+// Spawn in dependency order. The supervisor populates ctx.peers
+// with whatever siblings are already alive.
+runtime.spawn(agent_spec("editor", llm.clone(), || Editor)).await?;
+runtime.spawn(agent_spec("writer", llm.clone(), || Writer)).await?;
 ```
 
-Subscribe to lifecycle events:
+You can subscribe to lifecycle events:
 
 ```rust
 let mut events = runtime.subscribe();
@@ -94,34 +99,34 @@ while let Ok(event) = events.recv().await {
 
 ## Running the demo
 
-Copy the example config and add your OpenRouter API key:
+Set up your OpenRouter API key:
 
 ```bash
 cp mra.example.toml mra.toml
-# edit mra.toml with your API key
+# add your API key to mra.toml
 ```
 
-Or just set the env var:
+Or use an env var:
 
 ```bash
 export MRA_LLM__API_KEY="your-key-here"
 ```
 
-Then run:
+Run it:
 
 ```bash
 cargo run --bin demo "the invention of the transistor"
 ```
 
-This fires up three supervised agents (researcher → writer → editor) that each call the LLM and pass results down the chain. The supervisor logs lifecycle events as they happen.
+Three agents (researcher, writer, editor) form a pipeline. Each calls the LLM and hands the result to the next one. The supervisor prints lifecycle events as it goes.
 
 ## Config
 
-mra uses [figment](https://github.com/SergioBenitez/Figment) for layered config. It loads in this order (later wins):
+[Figment](https://github.com/SergioBenitez/Figment)-based, layered. Later sources override earlier ones:
 
 1. Hardcoded defaults
 2. `mra.toml` in the working directory
-3. Environment variables prefixed with `MRA_` (nested with `__`, so `MRA_LLM__API_KEY` sets `llm.api_key`)
+3. Env vars prefixed with `MRA_` (nested with `__`, e.g. `MRA_LLM__API_KEY`)
 
 ```toml
 [llm]
@@ -134,7 +139,7 @@ max_agents = 100
 shutdown_timeout_secs = 30
 ```
 
-## Architecture
+## How it's structured
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -142,9 +147,9 @@ shutdown_timeout_secs = 30
 │  ┌────────────────────────────────────────────────┐  │
 │  │              SupervisorRunner                   │  │
 │  │  select! loop:                                  │  │
-│  │    • JoinSet — child exits (crash/normal/hang)  │  │
-│  │    • mpsc    — commands (start/stop/get/shutdown)│  │
-│  │    • interval — hang check tick                  │  │
+│  │    • JoinSet    -- child exits                   │  │
+│  │    • mpsc       -- commands                      │  │
+│  │    • interval   -- hang checks                   │  │
 │  │                                                  │  │
 │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐      │  │
 │  │  │ Agent A  │  │ Agent B  │  │ Agent C  │      │  │
@@ -162,25 +167,25 @@ shutdown_timeout_secs = 30
 
 Each agent is two pieces:
 
-- **AgentHandle** — cloneable, Send + Sync. This is what you use to send tasks and get replies. Backed by a bounded `mpsc` channel routed through an `ArcSwap` mailbox slot.
-- **AgentRunner** — the internal loop that owns mutable state and calls your `AgentBehavior::handle`. Runs inside the supervisor's `JoinSet`.
+- `AgentHandle` -- the external API. Cloneable, `Send + Sync`. Sends tasks through a bounded `mpsc` channel routed through an `ArcSwap` mailbox slot.
+- `AgentRunner` -- the internal loop. Owns mutable state, receives messages, calls your `AgentBehavior::handle`. Runs inside the supervisor's `JoinSet`.
 
-The mailbox slot (`ArcSwap<mpsc::Sender>`) is the key trick: when an agent restarts, the supervisor swaps in a new sender pointing to the fresh agent task. Existing handles (held by peers or external code) keep working without any rewiring.
+The `ArcSwap` mailbox slot is what makes restarts transparent. When an agent dies and the supervisor respawns it, the new `mpsc::Sender` gets swapped into the same slot. Anyone holding an `AgentHandle` -- peers, external code, whoever -- keeps sending to the same stable address. They never know the agent restarted.
 
-## What's here
+## What's in the box
 
 - Actor system with bounded channels and backpressure
-- Erlang/OTP-style supervisor with OneForOne and OneForAll strategies
-- Automatic peer injection — agents discover siblings by name
+- Supervisor with OneForOne and OneForAll restart strategies
+- Peer injection (agents find siblings by name via `ctx.peers`)
 - Hot-swap mailbox slots that survive restarts
 - Hang detection via progress-state polling
-- Exponential backoff with per-child and global restart intensity limits
-- Lifecycle events via broadcast channel
-- Cancellation via `CancellationToken` (graceful shutdown and hard cancel)
-- LLM provider abstraction with OpenRouter client
+- Exponential backoff with per-child and global restart limits
+- Lifecycle events over a broadcast channel
+- Cancellation via `CancellationToken`
+- LLM abstraction with an OpenRouter client
 - Figment config with env var overrides
-- Error classification system (transient/permanent/overload/cancelled/budget) for retry decisions
-- 70+ tests including supervisor integration tests
+- Error classification (transient/permanent/overload/cancelled/budget)
+- 70+ tests
 
 ## Requirements
 
