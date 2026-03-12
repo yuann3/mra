@@ -39,6 +39,9 @@ pub enum AgentError {
     /// The agent's token/cost budget was exceeded.
     #[error("budget exceeded")]
     BudgetExceeded,
+    /// The agent is temporarily unavailable (e.g. mid-restart).
+    #[error("agent unavailable")]
+    Unavailable,
     /// An LLM call failed. Wraps the original [`LlmError`] to preserve
     /// error classification for retry/restart decisions.
     #[error(transparent)]
@@ -51,6 +54,7 @@ impl AgentError {
         match self {
             Self::HandlerFailed(_) => ErrorClass::Permanent,
             Self::Timeout => ErrorClass::Transient,
+            Self::Unavailable => ErrorClass::Transient,
             Self::Cancelled => ErrorClass::Cancelled,
             Self::BudgetExceeded => ErrorClass::BudgetExceeded,
             Self::Llm(e) => e.classification(),

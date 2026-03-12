@@ -68,6 +68,14 @@ fn budget_error_classification() {
 }
 
 #[test]
+fn agent_error_unavailable_is_transient() {
+    assert_eq!(
+        AgentError::Unavailable.classification(),
+        ErrorClass::Transient
+    );
+}
+
+#[test]
 fn mra_error_from_agent_error() {
     let agent_err = AgentError::Timeout;
     let mra_err: MraError = agent_err.into();
