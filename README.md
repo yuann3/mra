@@ -2,7 +2,7 @@
 
 > **WIP.** The API will change. Don't depend on this yet.
 
-Tokio actors for LLM agents, with an Erlang-style supervisor to restart them when they break.
+A multi-agent runtime for Rust. Spawn AI agents as lightweight Tokio actors, wire them together, and let them talk to LLMs — all under an Erlang-style supervisor that keeps things running.
 
 ## What is this?
 
