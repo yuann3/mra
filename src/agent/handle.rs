@@ -1,31 +1,34 @@
-use tokio::sync::{mpsc, oneshot};
+use std::sync::Arc;
+
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::AgentError;
 use crate::ids::AgentId;
 
+use super::mailbox::MailboxSlot;
 use super::message::{AgentMessage, AgentReply, Task};
 
 /// Cloneable handle for communicating with a running agent.
 ///
-/// Holds a bounded `mpsc::Sender` to the agent's mailbox and a
-/// [`CancellationToken`] for hard shutdown. Sending through the channel
-/// applies async backpressure — `execute` will yield (not block the OS
-/// thread) when the inbox is full.
+/// Holds a [`MailboxSlot`] (an `ArcSwap<mpsc::Sender>`) to the agent's
+/// mailbox and a [`CancellationToken`] for hard shutdown. Sending through
+/// the channel applies async backpressure — `execute` will yield (not
+/// block the OS thread) when the inbox is full.
 #[derive(Clone)]
 pub struct AgentHandle {
     id: AgentId,
-    sender: mpsc::Sender<AgentMessage>,
+    mailbox: Arc<MailboxSlot>,
     cancel: CancellationToken,
 }
 
 impl AgentHandle {
     pub(crate) fn new(
         id: AgentId,
-        sender: mpsc::Sender<AgentMessage>,
+        mailbox: Arc<MailboxSlot>,
         cancel: CancellationToken,
     ) -> Self {
-        Self { id, sender, cancel }
+        Self { id, mailbox, cancel }
     }
 
     /// Returns this agent's unique identifier.
@@ -33,19 +36,25 @@ impl AgentHandle {
         self.id
     }
 
+    /// Returns a reference to the shared [`MailboxSlot`] for supervisor access.
+    #[allow(dead_code)]
+    pub(crate) fn mailbox(&self) -> &Arc<MailboxSlot> {
+        &self.mailbox
+    }
+
     /// Sends a [`Task`] to the agent and awaits the reply.
     ///
-    /// Returns [`AgentError::Cancelled`] if the agent has already stopped
-    /// (channel closed) or drops the response sender before replying.
+    /// Returns [`AgentError::Unavailable`] if the agent's channel is closed
+    /// after a retry, or [`AgentError::Cancelled`] if the agent drops the
+    /// response sender before replying.
     pub async fn execute(&self, task: Task) -> Result<AgentReply, AgentError> {
         let (tx, rx) = oneshot::channel();
-        self.sender
+        self.mailbox
             .send(AgentMessage::Execute {
                 task,
                 respond_to: tx,
             })
-            .await
-            .map_err(|_| AgentError::Cancelled)?;
+            .await?;
 
         rx.await.map_err(|_| AgentError::Cancelled)?
     }
@@ -54,7 +63,7 @@ impl AgentHandle {
     /// buffered work until `deadline`, then exits. Best-effort — the send
     /// is ignored if the agent is already gone.
     pub async fn shutdown(&self, deadline: tokio::time::Instant) {
-        let _ = self.sender.send(AgentMessage::Shutdown { deadline }).await;
+        let _ = self.mailbox.send(AgentMessage::Shutdown { deadline }).await;
     }
 
     /// Triggers immediate cancellation via the [`CancellationToken`].
