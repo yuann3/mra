@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinSet;
@@ -12,7 +13,7 @@ use crate::error::SupervisorError;
 use crate::ids::AgentId;
 
 use super::child::{ChildContext, ChildSpec};
-use super::config::SupervisorConfig;
+use super::config::{ChildRestart, Strategy, SupervisorConfig};
 use super::event::SupervisorEvent;
 use super::handle::SupervisorCommand;
 use super::tracker::{IntensityTracker, RestartTracker};
@@ -217,17 +218,20 @@ impl SupervisorRunner {
             return Ok(());
         };
 
-        let Some(child) = self.children.get_mut(&name) else {
-            return Ok(());
+        let (old_gen, should_restart) = {
+            let Some(child) = self.children.get_mut(&name) else {
+                return Ok(());
+            };
+
+            let old_gen = child.generation;
+            child.alive = false;
+            child.child_cancel = None;
+            child.progress = None;
+
+            let is_failure = exit.is_failure();
+            let should_restart = child.spec.restart.should_restart(is_failure);
+            (old_gen, should_restart)
         };
-
-        let old_gen = child.generation;
-        child.alive = false;
-        child.child_cancel = None;
-        child.progress = None;
-
-        let is_failure = exit.is_failure();
-        let should_restart = child.spec.restart.should_restart(is_failure);
 
         let _ = self.event_tx.send(SupervisorEvent::ChildExited {
             name: name.clone(),
@@ -239,76 +243,174 @@ impl SupervisorRunner {
             return Ok(());
         }
 
-        // Record in per-child tracker
-        let now = tokio::time::Instant::now();
-        child.tracker.record(now);
+        match self.config.strategy {
+            Strategy::OneForOne => {
+                // Record in per-child tracker
+                let now = tokio::time::Instant::now();
+                let child = self.children.get_mut(&name).unwrap();
+                child.tracker.record(now);
 
-        if child.tracker.exceeded() {
-            let restarts = child.tracker.total_restarts;
-            let _ = self.event_tx.send(SupervisorEvent::ChildRestartLimitExceeded {
-                name,
-                restarts,
-            });
-            return Ok(());
+                if child.tracker.exceeded() {
+                    let restarts = child.tracker.total_restarts;
+                    let _ = self.event_tx.send(SupervisorEvent::ChildRestartLimitExceeded {
+                        name,
+                        restarts,
+                    });
+                    return Ok(());
+                }
+
+                // Record in per-supervisor intensity tracker
+                self.intensity.record(now);
+                if self.intensity.exceeded() {
+                    let total_restarts = self.intensity.total_restarts;
+                    let _ = self
+                        .event_tx
+                        .send(SupervisorEvent::RestartIntensityExceeded { total_restarts });
+                    return Err(SupervisorError::RestartIntensityExceeded { total_restarts });
+                }
+
+                // Compute backoff delay and sleep
+                let child = self.children.get(&name).unwrap();
+                let delay = child.tracker.backoff_delay();
+                tokio::time::sleep(delay).await;
+
+                // Don't restart if cancelled during backoff sleep
+                if self.cancel.is_cancelled() {
+                    return Ok(());
+                }
+
+                let child = self.children.get_mut(&name).unwrap();
+
+                // Increment generation and create new per-generation cancel token
+                let new_gen = old_gen + 1;
+                let child_cancel = child.logical_cancel.child_token();
+
+                let ctx = ChildContext {
+                    id: child.id,
+                    generation: new_gen,
+                    cancel: child_cancel.clone(),
+                    peers: HashMap::new(),
+                    llm: None,
+                };
+
+                let spawned = match (child.spec.factory)(ctx).await {
+                    Ok(s) => s,
+                    Err(_) => {
+                        // Factory failed — leave child dead
+                        return Ok(());
+                    }
+                };
+
+                // Hot-swap sender into stable mailbox
+                child.mailbox.swap(spawned.sender);
+
+                // Spawn new future in JoinSet
+                let abort = self.join_set.spawn(spawned.future);
+                let new_task_id = abort.id();
+                self.task_map.insert(new_task_id, name.clone());
+
+                // Update child state
+                child.generation = new_gen;
+                child.progress = Some(spawned.progress);
+                child.child_cancel = Some(child_cancel);
+                child.alive = true;
+
+                let _ = self.event_tx.send(SupervisorEvent::ChildRestarted {
+                    name,
+                    old_gen,
+                    new_gen,
+                    delay,
+                });
+            }
+            Strategy::OneForAll => {
+                self.restart_all(&name).await?;
+            }
         }
 
-        // Record in per-supervisor intensity tracker
+        Ok(())
+    }
+
+    async fn restart_all(&mut self, trigger_name: &str) -> Result<(), SupervisorError> {
+        // 1. Cancel all alive children (except the one that already exited)
+        for (name, child) in &self.children {
+            if name != trigger_name
+                && let Some(ref cancel) = child.child_cancel
+            {
+                cancel.cancel();
+            }
+        }
+
+        // 2. Wait for all to exit
+        while self.join_set.join_next().await.is_some() {}
+        self.task_map.clear();
+
+        // 3. Record restart in per-supervisor intensity tracker
+        let now = tokio::time::Instant::now();
         self.intensity.record(now);
         if self.intensity.exceeded() {
-            let total_restarts = self.intensity.total_restarts;
-            let _ = self.event_tx.send(SupervisorEvent::RestartIntensityExceeded { total_restarts });
-            return Err(SupervisorError::RestartIntensityExceeded { total_restarts });
+            let total = self.intensity.total_restarts;
+            let _ = self
+                .event_tx
+                .send(SupervisorEvent::RestartIntensityExceeded {
+                    total_restarts: total,
+                });
+            return Err(SupervisorError::RestartIntensityExceeded {
+                total_restarts: total,
+            });
         }
 
-        // Compute backoff delay and sleep
-        let delay = child.tracker.backoff_delay();
-        tokio::time::sleep(delay).await;
+        // 4. Respawn all non-Temporary children in insertion order
+        let order = self.child_order.clone();
+        for child_name in &order {
+            let child = self.children.get_mut(child_name).unwrap();
 
-        // Don't restart if cancelled during backoff sleep
-        if self.cancel.is_cancelled() {
-            return Ok(());
-        }
+            // Skip Temporary children
+            if matches!(child.spec.restart, ChildRestart::Temporary) {
+                child.alive = false;
+                continue;
+            }
 
-        // Increment generation and create new per-generation cancel token
-        let new_gen = old_gen + 1;
-        let child_cancel = child.logical_cancel.child_token();
-
-        let ctx = ChildContext {
-            id: child.id,
-            generation: new_gen,
-            cancel: child_cancel.clone(),
-            peers: HashMap::new(),
-            llm: None,
-        };
-
-        let spawned = match (child.spec.factory)(ctx).await {
-            Ok(s) => s,
-            Err(_) => {
-                // Factory failed — leave child dead
+            if self.cancel.is_cancelled() {
                 return Ok(());
             }
-        };
 
-        // Hot-swap sender into stable mailbox
-        child.mailbox.swap(spawned.sender);
+            let old_gen = child.generation;
+            let new_gen = old_gen + 1;
+            let child_cancel = child.logical_cancel.child_token();
 
-        // Spawn new future in JoinSet
-        let abort = self.join_set.spawn(spawned.future);
-        let new_task_id = abort.id();
-        self.task_map.insert(new_task_id, name.clone());
+            let ctx = ChildContext {
+                id: child.id,
+                generation: new_gen,
+                cancel: child_cancel.clone(),
+                peers: HashMap::new(),
+                llm: None,
+            };
 
-        // Update child state
-        child.generation = new_gen;
-        child.progress = Some(spawned.progress);
-        child.child_cancel = Some(child_cancel);
-        child.alive = true;
+            let spawned = match (child.spec.factory)(ctx).await {
+                Ok(s) => s,
+                Err(_) => {
+                    child.alive = false;
+                    continue;
+                }
+            };
 
-        let _ = self.event_tx.send(SupervisorEvent::ChildRestarted {
-            name,
-            old_gen,
-            new_gen,
-            delay,
-        });
+            child.mailbox.swap(spawned.sender);
+            let abort = self.join_set.spawn(spawned.future);
+            self.task_map.insert(abort.id(), child_name.clone());
+
+            child.generation = new_gen;
+            child.progress = Some(spawned.progress);
+            child.child_cancel = Some(child_cancel);
+            child.alive = true;
+            child.tracker.record(now);
+
+            let _ = self.event_tx.send(SupervisorEvent::ChildRestarted {
+                name: child_name.clone(),
+                old_gen,
+                new_gen,
+                delay: Duration::from_millis(0),
+            });
+        }
 
         Ok(())
     }
@@ -324,6 +426,38 @@ impl SupervisorRunner {
     }
 
     async fn check_hangs(&mut self) {
-        // Implemented in Task 11
+        let mut hangs = Vec::new();
+
+        for (name, child) in &self.children {
+            if !child.alive {
+                continue;
+            }
+            let Some(hang_timeout) = child.spec.hang_timeout else {
+                continue;
+            };
+            let Some(ref progress_rx) = child.progress else {
+                continue;
+            };
+
+            let progress = progress_rx.borrow();
+            if progress.busy && progress.last_progress.elapsed() > hang_timeout {
+                let elapsed = progress.last_progress.elapsed();
+                hangs.push((name.clone(), child.generation, elapsed));
+            }
+        }
+
+        for (name, generation, elapsed) in hangs {
+            let _ = self.event_tx.send(SupervisorEvent::HangDetected {
+                name: name.clone(),
+                generation,
+                elapsed,
+            });
+
+            if let Some(child) = self.children.get_mut(&name)
+                && let Some(cancel) = child.child_cancel.take()
+            {
+                cancel.cancel();
+            }
+        }
     }
 }

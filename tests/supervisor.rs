@@ -401,3 +401,78 @@ async fn test_supervisor_child_lookup() {
     handle.shutdown().await;
     let _ = join.await;
 }
+
+// --- Task 11: Hang detection via ProgressState polling ---
+
+#[tokio::test]
+async fn test_supervisor_detects_hung_agent() {
+    struct HangBehavior;
+    impl AgentBehavior for HangBehavior {
+        async fn handle(
+            &mut self,
+            _ctx: &mut AgentCtx,
+            _input: Task,
+        ) -> Result<AgentReply, AgentError> {
+            // Hang forever without reporting progress
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            unreachable!()
+        }
+    }
+
+    let config = SupervisorConfig {
+        hang_check_interval: Duration::from_millis(50),
+        ..Default::default()
+    };
+    let (handle, join) = SupervisorHandle::start(config);
+    let mut events = handle.subscribe();
+
+    // Drain SupervisorStarted
+    let _ = tokio::time::timeout(Duration::from_secs(1), events.recv()).await;
+
+    let spec = ChildSpec::new(
+        "hanger",
+        AgentConfig::new("hanger"),
+        Arc::new(move |ctx: ChildContext| {
+            Box::pin(async move {
+                Ok(AgentHandle::spawn_child(
+                    ctx.id,
+                    AgentConfig::new("hanger"),
+                    HangBehavior,
+                    ctx.peers,
+                    ctx.llm,
+                    ctx.cancel,
+                ))
+            })
+                as Pin<Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>>
+        }),
+    )
+    .with_hang_timeout(Duration::from_millis(100));
+
+    let agent = handle.start_child(spec).await.unwrap();
+
+    // Drain ChildStarted event
+    let _ = tokio::time::timeout(Duration::from_secs(1), events.recv()).await;
+
+    // Send a task to make the agent busy (don't await — it will hang)
+    let h = agent.clone();
+    tokio::spawn(async move {
+        let _ = h.execute(Task::new("hang forever")).await;
+    });
+
+    // Wait for hang detection
+    let mut found_hang = false;
+    for _ in 0..30 {
+        match tokio::time::timeout(Duration::from_millis(200), events.recv()).await {
+            Ok(Ok(SupervisorEvent::HangDetected { .. })) => {
+                found_hang = true;
+                break;
+            }
+            Ok(Ok(_)) => continue,
+            _ => continue,
+        }
+    }
+    assert!(found_hang, "should detect hung agent");
+
+    handle.shutdown().await;
+    let _ = join.await;
+}
