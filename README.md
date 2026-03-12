@@ -139,31 +139,7 @@ max_agents = 100
 shutdown_timeout_secs = 30
 ```
 
-## How it's structured
-
-```
-┌──────────────────────────────────────────────────────┐
-│                   SwarmRuntime                        │
-│  ┌────────────────────────────────────────────────┐  │
-│  │              SupervisorRunner                   │  │
-│  │  select! loop:                                  │  │
-│  │    • JoinSet    -- child exits                   │  │
-│  │    • mpsc       -- commands                      │  │
-│  │    • interval   -- hang checks                   │  │
-│  │                                                  │  │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐      │  │
-│  │  │ Agent A  │  │ Agent B  │  │ Agent C  │      │  │
-│  │  │ (Handle) │──│ (Handle) │──│ (Handle) │      │  │
-│  │  └──────────┘  └──────────┘  └──────────┘      │  │
-│  │       ↕ ArcSwap      ↕ ArcSwap     ↕ ArcSwap   │  │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐      │  │
-│  │  │ Mailbox  │  │ Mailbox  │  │ Mailbox  │      │  │
-│  │  │ (mpsc)   │  │ (mpsc)   │  │ (mpsc)   │      │  │
-│  │  └──────────┘  └──────────┘  └──────────┘      │  │
-│  └────────────────────────────────────────────────┘  │
-│              event_tx (broadcast)                     │
-└──────────────────────────────────────────────────────┘
-```
+## Soo
 
 Each agent is two pieces:
 
@@ -171,27 +147,3 @@ Each agent is two pieces:
 - `AgentRunner` -- the internal loop. Owns mutable state, receives messages, calls your `AgentBehavior::handle`. Runs inside the supervisor's `JoinSet`.
 
 The `ArcSwap` mailbox slot is what makes restarts transparent. When an agent dies and the supervisor respawns it, the new `mpsc::Sender` gets swapped into the same slot. Anyone holding an `AgentHandle` -- peers, external code, whoever -- keeps sending to the same stable address. They never know the agent restarted.
-
-## What's in the box
-
-- Actor system with bounded channels and backpressure
-- Supervisor with OneForOne and OneForAll restart strategies
-- Peer injection (agents find siblings by name via `ctx.peers`)
-- Hot-swap mailbox slots that survive restarts
-- Hang detection via progress-state polling
-- Exponential backoff with per-child and global restart limits
-- Lifecycle events over a broadcast channel
-- Cancellation via `CancellationToken`
-- LLM abstraction with an OpenRouter client
-- Figment config with env var overrides
-- Error classification (transient/permanent/overload/cancelled/budget)
-- 70+ tests
-
-## Requirements
-
-- Rust 1.91+ (edition 2024)
-- An OpenRouter API key (or any OpenAI-compatible endpoint)
-
-## License
-
-MIT
