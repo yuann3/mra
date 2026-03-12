@@ -3,12 +3,15 @@
 pub(crate) mod child;
 mod config;
 mod event;
+mod handle;
+pub(crate) mod runner;
 #[allow(dead_code)]
 pub(crate) mod tracker;
 
 pub use child::{ChildContext, ChildFactory, ChildSpec, SpawnedChild};
 pub use config::{ChildRestart, RestartIntensity, ShutdownPolicy, Strategy, SupervisorConfig};
 pub use event::SupervisorEvent;
+pub use handle::SupervisorHandle;
 
 /// Why a child agent exited.
 #[derive(Debug, Clone)]

@@ -14,7 +14,7 @@
 
 mod ctx;
 mod handle;
-mod mailbox;
+pub(crate) mod mailbox;
 mod message;
 mod runner;
 

@@ -71,6 +71,12 @@ pub enum SupervisorError {
     /// Failed to spawn a new agent task.
     #[error("failed to spawn agent: {0}")]
     SpawnFailed(String),
+    /// The supervisor's global restart intensity has been exceeded.
+    #[error("restart intensity exceeded: {total_restarts} restarts")]
+    RestartIntensityExceeded { total_restarts: u64 },
+    /// No child with the given name exists.
+    #[error("child not found: {0}")]
+    ChildNotFound(String),
 }
 
 impl SupervisorError {
@@ -79,6 +85,8 @@ impl SupervisorError {
         match self {
             Self::RestartLimitExceeded { .. } => ErrorClass::Permanent,
             Self::SpawnFailed(_) => ErrorClass::Transient,
+            Self::RestartIntensityExceeded { .. } => ErrorClass::Permanent,
+            Self::ChildNotFound(_) => ErrorClass::Permanent,
         }
     }
 }
