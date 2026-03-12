@@ -221,15 +221,93 @@ impl SupervisorRunner {
             return Ok(());
         };
 
-        let generation = child.generation;
+        let old_gen = child.generation;
         child.alive = false;
         child.child_cancel = None;
         child.progress = None;
 
-        self.emit(SupervisorEvent::ChildExited {
-            name,
-            generation,
+        let is_failure = exit.is_failure();
+        let should_restart = child.spec.restart.should_restart(is_failure);
+
+        let _ = self.event_tx.send(SupervisorEvent::ChildExited {
+            name: name.clone(),
+            generation: old_gen,
             exit,
+        });
+
+        if !should_restart || self.cancel.is_cancelled() {
+            return Ok(());
+        }
+
+        // Record in per-child tracker
+        let now = tokio::time::Instant::now();
+        child.tracker.record(now);
+
+        if child.tracker.exceeded() {
+            let restarts = child.tracker.total_restarts;
+            let _ = self.event_tx.send(SupervisorEvent::ChildRestartLimitExceeded {
+                name,
+                restarts,
+            });
+            return Ok(());
+        }
+
+        // Record in per-supervisor intensity tracker
+        self.intensity.record(now);
+        if self.intensity.exceeded() {
+            let total_restarts = self.intensity.total_restarts;
+            let _ = self.event_tx.send(SupervisorEvent::RestartIntensityExceeded { total_restarts });
+            return Err(SupervisorError::RestartIntensityExceeded { total_restarts });
+        }
+
+        // Compute backoff delay and sleep
+        let delay = child.tracker.backoff_delay();
+        tokio::time::sleep(delay).await;
+
+        // Don't restart if cancelled during backoff sleep
+        if self.cancel.is_cancelled() {
+            return Ok(());
+        }
+
+        // Increment generation and create new per-generation cancel token
+        let new_gen = old_gen + 1;
+        let child_cancel = child.logical_cancel.child_token();
+
+        let ctx = ChildContext {
+            id: child.id,
+            generation: new_gen,
+            cancel: child_cancel.clone(),
+            peers: HashMap::new(),
+            llm: None,
+        };
+
+        let spawned = match (child.spec.factory)(ctx).await {
+            Ok(s) => s,
+            Err(_) => {
+                // Factory failed — leave child dead
+                return Ok(());
+            }
+        };
+
+        // Hot-swap sender into stable mailbox
+        child.mailbox.swap(spawned.sender);
+
+        // Spawn new future in JoinSet
+        let abort = self.join_set.spawn(spawned.future);
+        let new_task_id = abort.id();
+        self.task_map.insert(new_task_id, name.clone());
+
+        // Update child state
+        child.generation = new_gen;
+        child.progress = Some(spawned.progress);
+        child.child_cancel = Some(child_cancel);
+        child.alive = true;
+
+        let _ = self.event_tx.send(SupervisorEvent::ChildRestarted {
+            name,
+            old_gen,
+            new_gen,
+            delay,
         });
 
         Ok(())

@@ -75,6 +75,25 @@ pub struct ChildSpec {
     pub hang_timeout: Option<Duration>,
 }
 
+impl SpawnedChild {
+    /// Creates a `SpawnedChild` from a bare future.
+    ///
+    /// The mailbox sender and progress watch are dummies — useful for testing
+    /// and for supervisors that manage non-agent children.
+    pub fn from_future(future: Pin<Box<dyn Future<Output = ChildExit> + Send>>) -> Self {
+        let (tx, _rx) = mpsc::channel(1);
+        let (_ptx, prx) = watch::channel(crate::agent::ProgressState {
+            last_progress: tokio::time::Instant::now(),
+            busy: false,
+        });
+        Self {
+            future,
+            progress: prx,
+            sender: tx,
+        }
+    }
+}
+
 impl ChildSpec {
     /// Creates a new `ChildSpec` with sensible defaults.
     ///

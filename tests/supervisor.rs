@@ -248,6 +248,144 @@ async fn test_supervisor_emits_events() {
     let _ = join.await;
 }
 
+// --- Task 9: Crash detection and OneForOne restart with backoff ---
+
+#[tokio::test]
+async fn test_supervisor_restarts_crashed_transient_child() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let start_count = Arc::new(AtomicU32::new(0));
+    let count = start_count.clone();
+
+    let spec = ChildSpec::new(
+        "crasher",
+        AgentConfig::new("crasher").with_restart_policy(mra::config::RestartPolicy {
+            max_restarts: 5,
+            window: Duration::from_secs(60),
+            backoff_base: Duration::from_millis(10),
+            backoff_max: Duration::from_millis(100),
+        }),
+        Arc::new(move |ctx: ChildContext| {
+            let count = count.clone();
+            Box::pin(async move {
+                let generation = ctx.generation;
+                count.fetch_add(1, Ordering::SeqCst);
+
+                if generation < 2 {
+                    Ok(SpawnedChild::from_future(
+                        Box::pin(async { ChildExit::Failed("crash".into()) }),
+                    ))
+                } else {
+                    Ok(AgentHandle::spawn_child(
+                        ctx.id,
+                        AgentConfig::new("crasher"),
+                        EchoBehavior,
+                        ctx.peers,
+                        ctx.llm,
+                        ctx.cancel,
+                    ))
+                }
+            })
+                as Pin<
+                    Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>,
+                >
+        }),
+    );
+
+    let (handle, join) = SupervisorHandle::start(SupervisorConfig::default());
+    let agent = handle.start_child(spec).await.unwrap();
+
+    // Wait for restarts (backoff is 10ms base, so should be fast)
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Should have been started 3 times (gen 0: crash, gen 1: crash, gen 2: ok)
+    assert!(
+        start_count.load(Ordering::SeqCst) >= 3,
+        "expected >= 3 starts, got {}",
+        start_count.load(Ordering::SeqCst),
+    );
+
+    // After gen 2 starts successfully, agent should work
+    let reply = agent.execute(Task::new("after restart")).await.unwrap();
+    assert_eq!(reply.output, "after restart");
+
+    handle.shutdown().await;
+    let _ = join.await;
+}
+
+#[tokio::test]
+async fn test_supervisor_temporary_child_not_restarted() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let start_count = Arc::new(AtomicU32::new(0));
+    let count = start_count.clone();
+
+    let spec = ChildSpec::new(
+        "temp",
+        AgentConfig::new("temp"),
+        Arc::new(move |_ctx: ChildContext| {
+            let count = count.clone();
+            Box::pin(async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(SpawnedChild::from_future(
+                    Box::pin(async { ChildExit::Failed("crash".into()) }),
+                ))
+            })
+                as Pin<
+                    Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>,
+                >
+        }),
+    )
+    .with_restart(ChildRestart::Temporary);
+
+    let (handle, join) = SupervisorHandle::start(SupervisorConfig::default());
+    handle.start_child(spec).await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Should only have started once — no restart for Temporary
+    assert_eq!(start_count.load(Ordering::SeqCst), 1);
+
+    handle.shutdown().await;
+    let _ = join.await;
+}
+
+#[tokio::test]
+async fn test_supervisor_transient_child_not_restarted_on_normal_exit() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let start_count = Arc::new(AtomicU32::new(0));
+    let count = start_count.clone();
+
+    let spec = ChildSpec::new(
+        "normal-exit",
+        AgentConfig::new("normal-exit"),
+        Arc::new(move |_ctx: ChildContext| {
+            let count = count.clone();
+            Box::pin(async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(SpawnedChild::from_future(
+                    Box::pin(async { ChildExit::Normal }),
+                ))
+            })
+                as Pin<
+                    Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>,
+                >
+        }),
+    );
+
+    let (handle, join) = SupervisorHandle::start(SupervisorConfig::default());
+    handle.start_child(spec).await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Transient: should not restart on normal exit
+    assert_eq!(start_count.load(Ordering::SeqCst), 1);
+
+    handle.shutdown().await;
+    let _ = join.await;
+}
+
 #[tokio::test]
 async fn test_supervisor_child_lookup() {
     let (handle, join) = SupervisorHandle::start(SupervisorConfig::default());
