@@ -14,6 +14,7 @@
 
 mod ctx;
 mod handle;
+mod mailbox;
 mod message;
 mod runner;
 

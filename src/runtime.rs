@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::agent::{AgentBehavior, AgentCtx, AgentHandle, SpawnedAgent};
+use crate::agent::{AgentBehavior, AgentHandle, SpawnedAgent};
 use crate::config::{AgentConfig, RuntimeConfig};
 use crate::ids::AgentId;
 use crate::llm::LlmProvider;
@@ -46,10 +46,9 @@ impl SwarmRuntime {
         llm: Option<Arc<dyn LlmProvider>>,
     ) -> AgentHandle {
         let id = AgentId::new();
-        let ctx = AgentCtx { id, peers, llm };
         let child_cancel = self.cancel.child_token();
 
-        let spawned = AgentHandle::spawn(config, behavior, ctx, child_cancel);
+        let spawned = AgentHandle::spawn(id, config, behavior, peers, llm, child_cancel);
         let handle = spawned.handle.clone();
 
         self.agents.insert(id, spawned);

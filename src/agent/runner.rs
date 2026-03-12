@@ -1,13 +1,20 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::AgentConfig;
 use crate::error::AgentError;
+use crate::ids::AgentId;
+use crate::llm::LlmProvider;
+use crate::supervisor::ChildExit;
 
 use super::AgentBehavior;
 use super::ctx::AgentCtx;
 use super::handle::AgentHandle;
+use super::mailbox::MailboxSlot;
 use super::message::AgentMessage;
 
 /// Snapshot of an agent's activity, published via a `watch` channel.
@@ -30,29 +37,28 @@ pub struct SpawnedAgent {
     /// Watch receiver for the agent's [`ProgressState`].
     pub progress: watch::Receiver<ProgressState>,
     /// Tokio `JoinHandle` for the agent's background task.
-    pub join: JoinHandle<()>,
+    pub join: JoinHandle<ChildExit>,
 }
 
 struct AgentRunner<B: AgentBehavior> {
     receiver: mpsc::Receiver<AgentMessage>,
     behavior: B,
     ctx: AgentCtx,
-    progress: watch::Sender<ProgressState>,
     cancel: CancellationToken,
 }
 
 impl<B: AgentBehavior> AgentRunner<B> {
-    async fn run(mut self) {
+    async fn run(mut self) -> ChildExit {
         loop {
             tokio::select! {
                 biased;
 
-                _ = self.cancel.cancelled() => break,
+                _ = self.cancel.cancelled() => return ChildExit::Shutdown,
 
                 msg = self.receiver.recv() => match msg {
-                    None => break,
+                    None => return ChildExit::Normal,
                     Some(AgentMessage::Execute { task, respond_to }) => {
-                        let _ = self.progress.send(ProgressState {
+                        let _ = self.ctx.progress_tx.send(ProgressState {
                             last_progress: tokio::time::Instant::now(),
                             busy: true,
                         });
@@ -63,7 +69,7 @@ impl<B: AgentBehavior> AgentRunner<B> {
                             res = self.behavior.handle(&mut self.ctx, task) => res,
                         };
 
-                        let _ = self.progress.send(ProgressState {
+                        let _ = self.ctx.progress_tx.send(ProgressState {
                             last_progress: tokio::time::Instant::now(),
                             busy: false,
                         });
@@ -73,7 +79,7 @@ impl<B: AgentBehavior> AgentRunner<B> {
                     Some(AgentMessage::Shutdown { deadline }) => {
                         self.receiver.close();
                         self.drain_until(deadline).await;
-                        break;
+                        return ChildExit::Shutdown;
                     }
                 },
             }
@@ -93,14 +99,14 @@ impl<B: AgentBehavior> AgentRunner<B> {
                 msg = self.receiver.recv() => match msg {
                     None => break,
                     Some(AgentMessage::Execute { task, respond_to }) => {
-                        let _ = self.progress.send(ProgressState {
+                        let _ = self.ctx.progress_tx.send(ProgressState {
                             last_progress: tokio::time::Instant::now(),
                             busy: true,
                         });
 
                         let result = self.behavior.handle(&mut self.ctx, task).await;
 
-                        let _ = self.progress.send(ProgressState {
+                        let _ = self.ctx.progress_tx.send(ProgressState {
                             last_progress: tokio::time::Instant::now(),
                             busy: false,
                         });
@@ -129,24 +135,33 @@ impl AgentHandle {
     /// a `watch` channel for [`ProgressState`], and spawns the internal
     /// runner loop. The runner is generic over `B` — no dynamic dispatch.
     pub fn spawn<B: AgentBehavior>(
+        id: AgentId,
         config: AgentConfig,
         behavior: B,
-        ctx: AgentCtx,
+        peers: HashMap<String, AgentHandle>,
+        llm: Option<Arc<dyn LlmProvider>>,
         cancel: CancellationToken,
     ) -> SpawnedAgent {
         let (tx, rx) = mpsc::channel(config.mailbox_size);
+        let mailbox = Arc::new(MailboxSlot::new(tx));
         let (progress_tx, progress_rx) = watch::channel(ProgressState {
             last_progress: tokio::time::Instant::now(),
             busy: false,
         });
 
-        let handle = AgentHandle::new(ctx.id, tx, cancel.clone());
+        let handle = AgentHandle::new(id, mailbox, cancel.clone());
+
+        let ctx = AgentCtx {
+            id,
+            peers,
+            llm,
+            progress_tx,
+        };
 
         let runner = AgentRunner {
             receiver: rx,
             behavior,
             ctx,
-            progress: progress_tx,
             cancel,
         };
 
