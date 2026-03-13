@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::AgentHandle;
 use crate::agent::ProgressState;
 use crate::agent::mailbox::MailboxSlot;
+use crate::budget::BudgetTracker;
 use crate::error::SupervisorError;
 use crate::ids::AgentId;
 
@@ -42,6 +43,7 @@ pub(crate) struct SupervisorRunner {
     event_tx: broadcast::Sender<SupervisorEvent>,
     cancel: CancellationToken,
     intensity: IntensityTracker,
+    budget: Option<Arc<BudgetTracker>>,
 }
 
 impl SupervisorRunner {
@@ -49,6 +51,7 @@ impl SupervisorRunner {
         config: SupervisorConfig,
         command_rx: mpsc::Receiver<SupervisorCommand>,
         event_tx: broadcast::Sender<SupervisorEvent>,
+        budget: Option<Arc<BudgetTracker>>,
     ) -> Self {
         let intensity = IntensityTracker::new(config.intensity.clone());
         Self {
@@ -61,6 +64,7 @@ impl SupervisorRunner {
             event_tx,
             cancel: CancellationToken::new(),
             intensity,
+            budget,
         }
     }
 
@@ -151,6 +155,11 @@ impl SupervisorRunner {
             })
             .collect();
 
+        // Register agent budget slot if budget tracking is active
+        if let Some(ref budget) = self.budget {
+            budget.register_agent(&name, spec.token_budget);
+        }
+
         // Call factory
         let ctx = ChildContext {
             id,
@@ -158,6 +167,7 @@ impl SupervisorRunner {
             cancel: child_cancel.clone(),
             peers,
             llm: None,
+            budget: self.budget.clone(),
         };
         let spawned = (spec.factory)(ctx)
             .await
@@ -322,6 +332,7 @@ impl SupervisorRunner {
                     cancel: child_cancel.clone(),
                     peers,
                     llm: None,
+                    budget: self.budget.clone(),
                 };
 
                 let spawned = match (child.spec.factory)(ctx).await {
@@ -435,6 +446,7 @@ impl SupervisorRunner {
                 cancel: child_cancel.clone(),
                 peers,
                 llm: None,
+                budget: self.budget.clone(),
             };
 
             let spawned = match (child.spec.factory)(ctx).await {

@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::AgentHandle;
 use crate::agent::ProgressState;
+use crate::budget::BudgetTracker;
 use crate::config::AgentConfig;
 use crate::error::SupervisorError;
 use crate::ids::AgentId;
@@ -31,6 +32,8 @@ pub struct ChildContext {
     pub peers: HashMap<String, AgentHandle>,
     /// Shared LLM provider.
     pub llm: Option<Arc<dyn LlmProvider>>,
+    /// Shared budget tracker.
+    pub budget: Option<Arc<BudgetTracker>>,
 }
 
 /// What a child factory returns on success.
@@ -81,6 +84,8 @@ pub struct ChildSpec {
     pub shutdown_policy: ShutdownPolicy,
     /// Optional hang-detection timeout override.
     pub hang_timeout: Option<Duration>,
+    /// Optional per-agent token budget.
+    pub token_budget: Option<u64>,
 }
 
 impl SpawnedChild {
@@ -119,6 +124,7 @@ impl ChildSpec {
             restart: ChildRestart::default(),
             shutdown_policy: ShutdownPolicy::default(),
             hang_timeout: None,
+            token_budget: None,
         }
     }
 
@@ -137,6 +143,12 @@ impl ChildSpec {
     /// Sets the hang-detection timeout override.
     pub fn with_hang_timeout(mut self, timeout: Duration) -> Self {
         self.hang_timeout = Some(timeout);
+        self
+    }
+
+    /// Sets the per-agent token budget.
+    pub fn with_token_budget(mut self, limit: u64) -> Self {
+        self.token_budget = Some(limit);
         self
     }
 }

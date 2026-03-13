@@ -22,7 +22,7 @@ use std::time::Duration;
 use mra::agent::{AgentBehavior, AgentCtx, AgentHandle, AgentReply, Task};
 use mra::config::{AgentConfig, MraConfig};
 use mra::error::AgentError;
-use mra::llm::{ChatMessage, LlmProvider, LlmRequest, OpenRouterClient, Role};
+use mra::llm::{ChatMessage, LlmRequest, LlmProvider, OpenRouterClient, Role};
 use mra::runtime::SwarmRuntime;
 use mra::supervisor::{
     ChildContext, ChildRestart, ChildSpec, SpawnedChild, SupervisorConfig, SupervisorEvent,
@@ -44,7 +44,6 @@ struct Researcher;
 
 impl AgentBehavior for Researcher {
     async fn handle(&mut self, ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
-        let llm = ctx.llm.as_ref().expect("no llm configured");
         let task_id = input.id;
 
         let request = LlmRequest {
@@ -63,7 +62,7 @@ impl AgentBehavior for Researcher {
             max_tokens: Some(1024),
         };
 
-        let response = llm.chat(&request).await.map_err(AgentError::Llm)?;
+        let response = ctx.chat(&request).await?;
         let tokens = response.total_tokens();
 
         // Peers are auto-injected by the supervisor — no manual wiring needed
@@ -73,7 +72,8 @@ impl AgentBehavior for Researcher {
         Ok(AgentReply {
             task_id,
             output: writer_reply.output,
-            tokens_used: tokens + writer_reply.tokens_used,
+            self_tokens: tokens,
+            total_tokens: tokens + writer_reply.total_tokens,
         })
     }
 }
@@ -82,7 +82,6 @@ struct Writer;
 
 impl AgentBehavior for Writer {
     async fn handle(&mut self, ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
-        let llm = ctx.llm.as_ref().expect("no llm configured");
         let task_id = input.id;
 
         let request = LlmRequest {
@@ -101,7 +100,7 @@ impl AgentBehavior for Writer {
             max_tokens: Some(2048),
         };
 
-        let response = llm.chat(&request).await.map_err(AgentError::Llm)?;
+        let response = ctx.chat(&request).await?;
         let tokens = response.total_tokens();
 
         let editor = ctx.peers.get("editor").expect("editor peer not found");
@@ -110,7 +109,8 @@ impl AgentBehavior for Writer {
         Ok(AgentReply {
             task_id,
             output: editor_reply.output,
-            tokens_used: tokens + editor_reply.tokens_used,
+            self_tokens: tokens,
+            total_tokens: tokens + editor_reply.total_tokens,
         })
     }
 }
@@ -119,7 +119,6 @@ struct Editor;
 
 impl AgentBehavior for Editor {
     async fn handle(&mut self, ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
-        let llm = ctx.llm.as_ref().expect("no llm configured");
         let task_id = input.id;
 
         let request = LlmRequest {
@@ -138,13 +137,14 @@ impl AgentBehavior for Editor {
             max_tokens: Some(2048),
         };
 
-        let response = llm.chat(&request).await.map_err(AgentError::Llm)?;
+        let response = ctx.chat(&request).await?;
         let tokens = response.total_tokens();
 
         Ok(AgentReply {
             task_id,
             output: response.content,
-            tokens_used: tokens,
+            self_tokens: tokens,
+            total_tokens: tokens,
         })
     }
 }
@@ -171,6 +171,7 @@ fn agent_spec<B: AgentBehavior>(
                     ctx.peers, // Supervisor populates this with alive siblings
                     Some(llm),
                     ctx.cancel,
+                    ctx.budget,
                 ))
             })
                 as Pin<
@@ -202,7 +203,7 @@ async fn main() -> anyhow::Result<()> {
         hang_check_interval: Duration::from_secs(5),
         ..Default::default()
     };
-    let runtime = SwarmRuntime::new(sup_config);
+    let runtime = SwarmRuntime::with_budget(sup_config, 50_000);
 
     // Subscribe to supervisor events and log them in the background
     let mut events = runtime.subscribe();
@@ -248,6 +249,9 @@ async fn main() -> anyhow::Result<()> {
                 SupervisorEvent::RestartIntensityExceeded { total_restarts } => {
                     println!("  ❌ Global restart intensity exceeded ({total_restarts} restarts)");
                 }
+                SupervisorEvent::BudgetExceeded { name, used, limit } => {
+                    println!("  💰 Budget exceeded: '{name}' ({used}/{limit} tokens)");
+                }
             }
         }
     });
@@ -275,8 +279,23 @@ async fn main() -> anyhow::Result<()> {
     let researcher = runtime.get_handle_by_name("researcher").await.unwrap();
     let reply = researcher.execute(Task::new(&topic)).await?;
 
-    println!("\n✅ Final output ({} tokens used):\n", reply.tokens_used);
+    println!("\n✅ Final output ({} total tokens across pipeline):\n", reply.total_tokens);
     println!("{}", reply.output);
+
+    // Print per-agent token breakdown
+    println!("\n📊 Token usage breakdown:");
+    if let Some(usage) = runtime.token_usage() {
+        println!(
+            "   Global: {} / {} tokens",
+            usage.used,
+            usage.limit.map_or("∞".to_string(), |l| l.to_string())
+        );
+    }
+    for name in &["researcher", "writer", "editor"] {
+        if let Some(usage) = runtime.agent_token_usage(name) {
+            println!("   {name}: {} tokens (direct LLM usage)", usage.used);
+        }
+    }
 
     runtime.shutdown().await;
     Ok(())

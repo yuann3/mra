@@ -15,7 +15,8 @@ impl AgentBehavior for EchoBehavior {
         Ok(AgentReply {
             task_id: input.id,
             output: input.instruction.clone(),
-            tokens_used: 0,
+            self_tokens: 0,
+            total_tokens: 0,
         })
     }
 }
@@ -31,7 +32,8 @@ impl AgentBehavior for SlowBehavior {
         Ok(AgentReply {
             task_id: input.id,
             output: format!("done after {:?}", self.delay),
-            tokens_used: 0,
+            self_tokens: 0,
+            total_tokens: 0,
         })
     }
 }
@@ -48,6 +50,7 @@ async fn test_agent_execute() {
         HashMap::new(),
         None,
         cancel,
+        None,
     );
 
     let task = Task::new("hello world");
@@ -70,6 +73,7 @@ async fn test_agent_shutdown() {
         HashMap::new(),
         None,
         cancel,
+        None,
     );
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -92,6 +96,7 @@ async fn test_agent_cancel() {
         HashMap::new(),
         None,
         cancel,
+        None,
     );
 
     spawned.handle.cancel();
@@ -114,6 +119,7 @@ async fn test_agent_backpressure() {
         HashMap::new(),
         None,
         cancel,
+        None,
     );
 
     let handle1 = spawned.handle.clone();
@@ -157,6 +163,7 @@ async fn test_agent_progress_updates() {
         HashMap::new(),
         None,
         cancel,
+        None,
     );
 
     // Initially not busy
@@ -190,6 +197,7 @@ async fn test_agent_execute_after_channel_closed() {
         HashMap::new(),
         None,
         cancel,
+        None,
     );
 
     // Cancel the agent so it stops
@@ -230,7 +238,8 @@ async fn test_agent_delegates_to_peer() {
             Ok(AgentReply {
                 task_id: input.id,
                 output: format!("via-delegate: {}", reply.output),
-                tokens_used: 0,
+                self_tokens: 0,
+                total_tokens: 0,
             })
         }
     }
@@ -244,6 +253,7 @@ async fn test_agent_delegates_to_peer() {
         HashMap::new(),
         None,
         cancel.clone(),
+        None,
     );
 
     let mut peers = HashMap::new();
@@ -255,6 +265,7 @@ async fn test_agent_delegates_to_peer() {
         peers,
         None,
         cancel.clone(),
+        None,
     );
 
     let reply = delegator.handle.execute(Task::new("hello")).await.unwrap();
@@ -280,7 +291,8 @@ async fn test_agent_report_progress() {
             Ok(AgentReply {
                 task_id: input.id,
                 output: "done".into(),
-                tokens_used: 0,
+                self_tokens: 0,
+                total_tokens: 0,
             })
         }
     }
@@ -294,6 +306,7 @@ async fn test_agent_report_progress() {
         HashMap::new(),
         None,
         cancel,
+        None,
     );
 
     let handle = spawned.handle.clone();
