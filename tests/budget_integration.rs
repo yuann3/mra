@@ -7,9 +7,7 @@ use mra::config::AgentConfig;
 use mra::error::AgentError;
 use mra::llm::{ChatMessage, LlmProvider, LlmRequest, LlmResponse, Role};
 use mra::runtime::SwarmRuntime;
-use mra::supervisor::{
-    ChildContext, ChildRestart, ChildSpec, SpawnedChild, SupervisorConfig,
-};
+use mra::supervisor::{ChildContext, ChildRestart, ChildSpec, SpawnedChild, SupervisorConfig};
 
 /// Mock LLM that returns a fixed number of tokens per call.
 struct MockLlm(u64);
@@ -18,8 +16,7 @@ impl LlmProvider for MockLlm {
     fn chat<'a>(
         &'a self,
         _req: &'a LlmRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<LlmResponse, mra::error::LlmError>> + Send + 'a>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<LlmResponse, mra::error::LlmError>> + Send + 'a>> {
         let tokens = self.0;
         Box::pin(async move {
             Ok(LlmResponse {
@@ -91,10 +88,7 @@ async fn test_budget_kill_switch() {
 
     let runtime = SwarmRuntime::with_budget(SupervisorConfig::default(), 250);
 
-    runtime
-        .spawn(test_spec("agent", llm))
-        .await
-        .unwrap();
+    runtime.spawn(test_spec("agent", llm)).await.unwrap();
 
     let handle = runtime.get_handle_by_name("agent").await.unwrap();
 
@@ -158,10 +152,7 @@ async fn test_no_budget_means_unlimited() {
 
     let runtime = SwarmRuntime::new(SupervisorConfig::default());
 
-    runtime
-        .spawn(test_spec("agent", llm))
-        .await
-        .unwrap();
+    runtime.spawn(test_spec("agent", llm)).await.unwrap();
 
     let handle = runtime.get_handle_by_name("agent").await.unwrap();
 

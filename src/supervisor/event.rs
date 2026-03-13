@@ -13,10 +13,7 @@ pub enum SupervisorEvent {
     /// The supervisor is draining children before shutting down.
     SupervisorStopping,
     /// A child was spawned (or respawned) successfully.
-    ChildStarted {
-        name: String,
-        generation: u64,
-    },
+    ChildStarted { name: String, generation: u64 },
     /// A child's run future completed.
     ChildExited {
         name: String,
@@ -37,18 +34,9 @@ pub enum SupervisorEvent {
         elapsed: Duration,
     },
     /// A single child hit its per-child restart limit and will not be restarted again.
-    ChildRestartLimitExceeded {
-        name: String,
-        restarts: u64,
-    },
+    ChildRestartLimitExceeded { name: String, restarts: u64 },
     /// Supervisor-wide restart intensity exceeded — the supervisor shuts down.
-    RestartIntensityExceeded {
-        total_restarts: u64,
-    },
+    RestartIntensityExceeded { total_restarts: u64 },
     /// A token budget was exceeded (reserved for future event-emitter wiring).
-    BudgetExceeded {
-        name: String,
-        used: u64,
-        limit: u64,
-    },
+    BudgetExceeded { name: String, used: u64, limit: u64 },
 }

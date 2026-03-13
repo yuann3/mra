@@ -22,7 +22,7 @@ use std::time::Duration;
 use mra::agent::{AgentBehavior, AgentCtx, AgentHandle, AgentReply, Task};
 use mra::config::{AgentConfig, MraConfig};
 use mra::error::AgentError;
-use mra::llm::{ChatMessage, LlmRequest, LlmProvider, OpenRouterClient, Role};
+use mra::llm::{ChatMessage, LlmProvider, LlmRequest, OpenRouterClient, Role};
 use mra::runtime::SwarmRuntime;
 use mra::supervisor::{
     ChildContext, ChildRestart, ChildSpec, SpawnedChild, SupervisorConfig, SupervisorEvent,
@@ -279,7 +279,10 @@ async fn main() -> anyhow::Result<()> {
     let researcher = runtime.get_handle_by_name("researcher").await.unwrap();
     let reply = researcher.execute(Task::new(&topic)).await?;
 
-    println!("\n✅ Final output ({} total tokens across pipeline):\n", reply.total_tokens);
+    println!(
+        "\n✅ Final output ({} total tokens across pipeline):\n",
+        reply.total_tokens
+    );
     println!("{}", reply.output);
 
     // Print per-agent token breakdown

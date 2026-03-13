@@ -11,7 +11,7 @@ use super::message::{AgentMessage, AgentReply, Task};
 
 /// Cloneable handle for communicating with a running agent.
 ///
-/// Holds a [`MailboxSlot`] (an `ArcSwap<mpsc::Sender>`) to the agent's
+/// Holds a `MailboxSlot` (an `ArcSwap<mpsc::Sender>`) to the agent's
 /// mailbox and a [`CancellationToken`] for hard shutdown. Sending through
 /// the channel applies async backpressure — `execute` will yield (not
 /// block the OS thread) when the inbox is full.

@@ -81,9 +81,7 @@ pub struct BudgetTracker {
 impl BudgetTracker {
     /// Creates a new builder.
     pub fn builder() -> BudgetTrackerBuilder {
-        BudgetTrackerBuilder {
-            global_limit: None,
-        }
+        BudgetTrackerBuilder { global_limit: None }
     }
 
     /// Register a per-agent budget slot. Called by the supervisor on spawn.
@@ -92,11 +90,13 @@ impl BudgetTracker {
     /// existing counters are preserved — usage persists across restarts.
     pub fn register_agent(&self, name: &str, limit: Option<u64>) {
         let mut agents = self.agents.write().unwrap();
-        agents.entry(name.to_string()).or_insert_with(|| AgentBudget {
-            used: AtomicU64::new(0),
-            limit,
-            tripped: AtomicBool::new(false),
-        });
+        agents
+            .entry(name.to_string())
+            .or_insert_with(|| AgentBudget {
+                used: AtomicU64::new(0),
+                limit,
+                tripped: AtomicBool::new(false),
+            });
     }
 
     /// Returns `true` if the budget for the given agent has been tripped.
