@@ -11,10 +11,11 @@
 //!   detection and exponential backoff.
 //! - **WASM sandboxing**: tools run in Wasmtime with deny-by-default permissions
 //!   and fuel limits, on `spawn_blocking` to avoid starving the Tokio runtime.
-//! - **Budget enforcement**: per-run and per-agent token/cost limits with
-//!   automatic cancellation on exceed.
+//! - **Budget enforcement**: per-run and per-agent token limits. Once a
+//!   limit is crossed, further LLM calls fail immediately.
 
 pub mod agent;
+pub mod budget;
 pub mod config;
 pub mod error;
 pub mod ids;

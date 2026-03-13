@@ -5,6 +5,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::budget::BudgetTracker;
 use crate::config::AgentConfig;
 use crate::error::AgentError;
 use crate::ids::AgentId;
@@ -142,6 +143,7 @@ impl AgentHandle {
         peers: HashMap<String, AgentHandle>,
         llm: Option<Arc<dyn LlmProvider>>,
         cancel: CancellationToken,
+        budget: Option<Arc<BudgetTracker>>,
     ) -> SpawnedAgent {
         let (tx, rx) = mpsc::channel(config.mailbox_size);
         let mailbox = Arc::new(MailboxSlot::new(tx));
@@ -154,8 +156,10 @@ impl AgentHandle {
 
         let ctx = AgentCtx {
             id,
+            name: config.name.clone(),
             peers,
             llm,
+            budget,
             progress_tx,
         };
 
@@ -186,6 +190,7 @@ impl AgentHandle {
         peers: HashMap<String, AgentHandle>,
         llm: Option<Arc<dyn LlmProvider>>,
         cancel: CancellationToken,
+        budget: Option<Arc<BudgetTracker>>,
     ) -> SpawnedChild {
         let (tx, rx) = mpsc::channel(config.mailbox_size);
         let (progress_tx, progress_rx) = watch::channel(ProgressState {
@@ -195,8 +200,10 @@ impl AgentHandle {
 
         let ctx = AgentCtx {
             id,
+            name: config.name.clone(),
             peers,
             llm,
+            budget,
             progress_tx,
         };
 

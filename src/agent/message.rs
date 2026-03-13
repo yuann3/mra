@@ -33,8 +33,10 @@ pub struct AgentReply {
     pub task_id: TaskId,
     /// The agent's output text.
     pub output: String,
-    /// Number of LLM tokens consumed while processing this task.
-    pub tokens_used: u64,
+    /// This agent's direct LLM token usage (not including nested agents).
+    pub self_tokens: u64,
+    /// End-to-end pipeline total (self + nested agents). Telemetry only.
+    pub total_tokens: u64,
 }
 
 /// Internal message envelope sent through the agent's bounded `mpsc` channel.

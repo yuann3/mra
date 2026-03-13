@@ -16,7 +16,8 @@ impl AgentBehavior for EchoBehavior {
         Ok(AgentReply {
             task_id: input.id,
             output: input.instruction.clone(),
-            tokens_used: 0,
+            self_tokens: 0,
+            total_tokens: 0,
         })
     }
 }
@@ -36,6 +37,7 @@ fn echo_spec(name: &str) -> ChildSpec {
                     ctx.peers,
                     ctx.llm,
                     ctx.cancel,
+                    None,
                 ))
             })
                 as Pin<

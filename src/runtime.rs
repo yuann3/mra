@@ -1,9 +1,12 @@
 //! Swarm runtime — thin wrapper around the root supervisor.
 
+use std::sync::Arc;
+
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 use crate::agent::AgentHandle;
+use crate::budget::{AgentUsage, BudgetTracker, RunUsage};
 use crate::error::SupervisorError;
 use crate::supervisor::{ChildSpec, SupervisorConfig, SupervisorEvent, SupervisorHandle};
 
@@ -15,13 +18,37 @@ use crate::supervisor::{ChildSpec, SupervisorConfig, SupervisorEvent, Supervisor
 pub struct SwarmRuntime {
     supervisor: SupervisorHandle,
     join: JoinHandle<Result<(), SupervisorError>>,
+    budget: Option<Arc<BudgetTracker>>,
 }
 
 impl SwarmRuntime {
     /// Creates a new runtime backed by a supervisor with the given config.
     pub fn new(config: SupervisorConfig) -> Self {
         let (supervisor, join) = SupervisorHandle::start(config);
-        Self { supervisor, join }
+        Self {
+            supervisor,
+            join,
+            budget: None,
+        }
+    }
+
+    /// Creates a new runtime with a global token budget.
+    ///
+    /// When the budget is exceeded, agents receive
+    /// `AgentError::BudgetExceeded` from
+    /// [`AgentCtx::chat`](crate::agent::AgentCtx::chat).
+    pub fn with_budget(config: SupervisorConfig, global_limit: u64) -> Self {
+        let budget = Arc::new(
+            BudgetTracker::builder()
+                .global_limit(global_limit)
+                .build_unconnected(),
+        );
+        let (supervisor, join) = SupervisorHandle::start_with_budget(config, Some(budget.clone()));
+        Self {
+            supervisor,
+            join,
+            budget: Some(budget),
+        }
     }
 
     /// Spawns a child agent via the supervisor.
@@ -37,6 +64,16 @@ impl SwarmRuntime {
     /// Subscribes to supervisor events.
     pub fn subscribe(&self) -> broadcast::Receiver<SupervisorEvent> {
         self.supervisor.subscribe()
+    }
+
+    /// Returns current global token usage, if a budget is configured.
+    pub fn token_usage(&self) -> Option<RunUsage> {
+        self.budget.as_ref().map(|b| b.run_usage())
+    }
+
+    /// Returns per-agent token usage, if a budget is configured.
+    pub fn agent_token_usage(&self, name: &str) -> Option<AgentUsage> {
+        self.budget.as_ref().and_then(|b| b.agent_usage(name))
     }
 
     /// Gracefully shuts down all agents and the supervisor.

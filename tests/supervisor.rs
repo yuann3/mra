@@ -68,7 +68,8 @@ fn child_spec_with_defaults() {
             Ok(AgentReply {
                 task_id: input.id,
                 output: String::new(),
-                tokens_used: 0,
+                self_tokens: 0,
+                total_tokens: 0,
             })
         }
     }
@@ -85,6 +86,7 @@ fn child_spec_with_defaults() {
                     ctx.peers,
                     ctx.llm,
                     ctx.cancel,
+                    None,
                 ))
             })
                 as Pin<
@@ -113,7 +115,8 @@ fn child_spec_builder_methods() {
             Ok(AgentReply {
                 task_id: input.id,
                 output: String::new(),
-                tokens_used: 0,
+                self_tokens: 0,
+                total_tokens: 0,
             })
         }
     }
@@ -130,6 +133,7 @@ fn child_spec_builder_methods() {
                     ctx.peers,
                     ctx.llm,
                     ctx.cancel,
+                    None,
                 ))
             })
                 as Pin<
@@ -160,7 +164,8 @@ impl AgentBehavior for EchoBehavior {
         Ok(AgentReply {
             task_id: input.id,
             output: input.instruction.clone(),
-            tokens_used: 0,
+            self_tokens: 0,
+            total_tokens: 0,
         })
     }
 }
@@ -180,6 +185,7 @@ fn echo_spec(name: &str) -> ChildSpec {
                     ctx.peers,
                     ctx.llm,
                     ctx.cancel,
+                    None,
                 ))
             })
                 as Pin<
@@ -285,6 +291,7 @@ async fn test_supervisor_restarts_crashed_transient_child() {
                         ctx.peers,
                         ctx.llm,
                         ctx.cancel,
+                        None,
                     ))
                 }
             })
@@ -437,6 +444,7 @@ async fn test_supervisor_one_for_all_restarts_all_children() {
                     ctx.peers,
                     ctx.llm,
                     ctx.cancel,
+                    None,
                 ))
             })
                 as Pin<
@@ -469,6 +477,7 @@ async fn test_supervisor_one_for_all_restarts_all_children() {
                         ctx.peers,
                         ctx.llm,
                         ctx.cancel,
+                        None,
                     ))
                 }
             })
@@ -549,6 +558,7 @@ async fn test_supervisor_detects_hung_agent() {
                     ctx.peers,
                     ctx.llm,
                     ctx.cancel,
+                    None,
                 ))
             })
                 as Pin<
