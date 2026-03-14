@@ -1,10 +1,10 @@
 # mra
 
-> **WIP.** The API will change. Don't depend on this yet.
+> **WIP.** Don't depend on this yet.
 
-A multi-agent runtime for Rust. Spawn AI agents as lightweight Tokio actors, wire them together, and let them talk to LLMs — all under an Erlang-style supervisor that keeps things running.
+You know you can just make things right, and i just want something lightweight and make me happy. So here we go, a multi-agent runtime for Rust. Spawn AI agents as lightweight Tokio actors, wire them together, and let them talk to LLMs
 
-## What is this?
+## What?
 
 Each agent runs as its own async task with a bounded `mpsc` mailbox. Agents talk to each other through handles, call LLMs, and get restarted by a supervisor if they crash or stop responding. No shared mutable state.
 
