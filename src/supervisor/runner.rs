@@ -12,6 +12,7 @@ use crate::agent::mailbox::MailboxSlot;
 use crate::budget::BudgetTracker;
 use crate::error::SupervisorError;
 use crate::ids::AgentId;
+use crate::tool::ToolRegistry;
 
 use super::ChildExit;
 use super::child::{ChildContext, ChildSpec};
@@ -168,6 +169,7 @@ impl SupervisorRunner {
             peers,
             llm: None,
             budget: self.budget.clone(),
+            tools: ToolRegistry::new(),
         };
         let spawned = (spec.factory)(ctx)
             .await
@@ -333,6 +335,7 @@ impl SupervisorRunner {
                     peers,
                     llm: None,
                     budget: self.budget.clone(),
+                    tools: ToolRegistry::new(),
                 };
 
                 let spawned = match (child.spec.factory)(ctx).await {
@@ -447,6 +450,7 @@ impl SupervisorRunner {
                 peers,
                 llm: None,
                 budget: self.budget.clone(),
+                tools: ToolRegistry::new(),
             };
 
             let spawned = match (child.spec.factory)(ctx).await {

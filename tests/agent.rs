@@ -5,6 +5,7 @@ use mra::agent::{AgentBehavior, AgentCtx, AgentHandle, AgentReply, Task};
 use mra::config::AgentConfig;
 use mra::error::AgentError;
 use mra::ids::AgentId;
+use mra::tool::ToolRegistry;
 use tokio_util::sync::CancellationToken;
 
 /// A simple behavior that echoes the instruction back as output.
@@ -51,6 +52,7 @@ async fn test_agent_execute() {
         None,
         cancel,
         None,
+        ToolRegistry::new(),
     );
 
     let task = Task::new("hello world");
@@ -74,6 +76,7 @@ async fn test_agent_shutdown() {
         None,
         cancel,
         None,
+        ToolRegistry::new(),
     );
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -97,6 +100,7 @@ async fn test_agent_cancel() {
         None,
         cancel,
         None,
+        ToolRegistry::new(),
     );
 
     spawned.handle.cancel();
@@ -120,6 +124,7 @@ async fn test_agent_backpressure() {
         None,
         cancel,
         None,
+        ToolRegistry::new(),
     );
 
     let handle1 = spawned.handle.clone();
@@ -164,6 +169,7 @@ async fn test_agent_progress_updates() {
         None,
         cancel,
         None,
+        ToolRegistry::new(),
     );
 
     // Initially not busy
@@ -198,6 +204,7 @@ async fn test_agent_execute_after_channel_closed() {
         None,
         cancel,
         None,
+        ToolRegistry::new(),
     );
 
     // Cancel the agent so it stops
@@ -254,6 +261,7 @@ async fn test_agent_delegates_to_peer() {
         None,
         cancel.clone(),
         None,
+        ToolRegistry::new(),
     );
 
     let mut peers = HashMap::new();
@@ -266,6 +274,7 @@ async fn test_agent_delegates_to_peer() {
         None,
         cancel.clone(),
         None,
+        ToolRegistry::new(),
     );
 
     let reply = delegator.handle.execute(Task::new("hello")).await.unwrap();
@@ -307,6 +316,7 @@ async fn test_agent_report_progress() {
         None,
         cancel,
         None,
+        ToolRegistry::new(),
     );
 
     let handle = spawned.handle.clone();

@@ -23,6 +23,7 @@ impl LlmProvider for MockLlm {
                 content: "mock".into(),
                 prompt_tokens: tokens / 2,
                 completion_tokens: tokens - tokens / 2,
+                tool_calls: vec![],
             })
         })
     }
@@ -37,9 +38,12 @@ impl AgentBehavior for SimpleBehavior {
             messages: vec![ChatMessage {
                 role: Role::User,
                 content: input.instruction.clone(),
+                tool_calls: vec![],
+                tool_call_id: None,
             }],
             temperature: None,
             max_tokens: None,
+            tools: None,
         };
         let response = ctx.chat(&request).await?;
         let tokens = response.total_tokens();
@@ -69,6 +73,7 @@ fn test_spec(name: &str, llm: Arc<dyn LlmProvider>) -> ChildSpec {
                     Some(llm),
                     ctx.cancel,
                     ctx.budget,
+                    ctx.tools,
                 ))
             })
                 as Pin<

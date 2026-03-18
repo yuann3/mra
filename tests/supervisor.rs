@@ -87,6 +87,7 @@ fn child_spec_with_defaults() {
                     ctx.llm,
                     ctx.cancel,
                     None,
+                    ctx.tools,
                 ))
             })
                 as Pin<
@@ -134,6 +135,7 @@ fn child_spec_builder_methods() {
                     ctx.llm,
                     ctx.cancel,
                     None,
+                    ctx.tools,
                 ))
             })
                 as Pin<
@@ -186,6 +188,7 @@ fn echo_spec(name: &str) -> ChildSpec {
                     ctx.llm,
                     ctx.cancel,
                     None,
+                    ctx.tools,
                 ))
             })
                 as Pin<
@@ -292,6 +295,7 @@ async fn test_supervisor_restarts_crashed_transient_child() {
                         ctx.llm,
                         ctx.cancel,
                         None,
+                        ctx.tools,
                     ))
                 }
             })
@@ -445,6 +449,7 @@ async fn test_supervisor_one_for_all_restarts_all_children() {
                     ctx.llm,
                     ctx.cancel,
                     None,
+                    ctx.tools,
                 ))
             })
                 as Pin<
@@ -478,6 +483,7 @@ async fn test_supervisor_one_for_all_restarts_all_children() {
                         ctx.llm,
                         ctx.cancel,
                         None,
+                        ctx.tools,
                     ))
                 }
             })
@@ -559,6 +565,7 @@ async fn test_supervisor_detects_hung_agent() {
                     ctx.llm,
                     ctx.cancel,
                     None,
+                    ctx.tools,
                 ))
             })
                 as Pin<

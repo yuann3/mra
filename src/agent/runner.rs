@@ -12,6 +12,7 @@ use crate::ids::AgentId;
 use crate::llm::LlmProvider;
 use crate::supervisor::ChildExit;
 use crate::supervisor::child::SpawnedChild;
+use crate::tool::ToolRegistry;
 
 use super::AgentBehavior;
 use super::ctx::AgentCtx;
@@ -136,6 +137,7 @@ impl AgentHandle {
     /// Creates a bounded `mpsc` channel (capacity from `config.mailbox_size`),
     /// a `watch` channel for [`ProgressState`], and spawns the internal
     /// runner loop. The runner is generic over `B` — no dynamic dispatch.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn<B: AgentBehavior>(
         id: AgentId,
         config: AgentConfig,
@@ -144,6 +146,7 @@ impl AgentHandle {
         llm: Option<Arc<dyn LlmProvider>>,
         cancel: CancellationToken,
         budget: Option<Arc<BudgetTracker>>,
+        tools: ToolRegistry,
     ) -> SpawnedAgent {
         let (tx, rx) = mpsc::channel(config.mailbox_size);
         let mailbox = Arc::new(MailboxSlot::new(tx));
@@ -161,6 +164,7 @@ impl AgentHandle {
             llm,
             budget,
             progress_tx,
+            tools,
         };
 
         let runner = AgentRunner {
@@ -183,6 +187,7 @@ impl AgentHandle {
     ///
     /// Returns a [`SpawnedChild`] whose future the supervisor will spawn
     /// via its own `JoinSet`, giving it full control over task lifecycle.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn_child<B: AgentBehavior>(
         id: AgentId,
         config: AgentConfig,
@@ -191,6 +196,7 @@ impl AgentHandle {
         llm: Option<Arc<dyn LlmProvider>>,
         cancel: CancellationToken,
         budget: Option<Arc<BudgetTracker>>,
+        tools: ToolRegistry,
     ) -> SpawnedChild {
         let (tx, rx) = mpsc::channel(config.mailbox_size);
         let (progress_tx, progress_rx) = watch::channel(ProgressState {
@@ -205,6 +211,7 @@ impl AgentHandle {
             llm,
             budget,
             progress_tx,
+            tools,
         };
 
         let runner = AgentRunner {

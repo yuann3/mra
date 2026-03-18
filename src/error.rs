@@ -106,6 +106,9 @@ pub enum ToolError {
     /// No tool with the given name is registered.
     #[error("tool not found: {0}")]
     NotFound(String),
+    /// The arguments passed to a tool were invalid.
+    #[error("invalid tool arguments: {0}")]
+    InvalidArgs(String),
 }
 
 impl ToolError {
@@ -116,6 +119,7 @@ impl ToolError {
             Self::FuelExhausted => ErrorClass::Overload,
             Self::ExecutionFailed(_) => ErrorClass::Transient,
             Self::NotFound(_) => ErrorClass::Permanent,
+            Self::InvalidArgs(_) => ErrorClass::Permanent,
         }
     }
 }

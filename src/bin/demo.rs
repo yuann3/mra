@@ -52,14 +52,19 @@ impl AgentBehavior for Researcher {
                 ChatMessage {
                     role: Role::System,
                     content: RESEARCHER_SYSTEM.into(),
+                    tool_calls: vec![],
+                    tool_call_id: None,
                 },
                 ChatMessage {
                     role: Role::User,
                     content: input.instruction,
+                    tool_calls: vec![],
+                    tool_call_id: None,
                 },
             ],
             temperature: Some(0.3),
             max_tokens: Some(1024),
+            tools: None,
         };
 
         let response = ctx.chat(&request).await?;
@@ -90,14 +95,19 @@ impl AgentBehavior for Writer {
                 ChatMessage {
                     role: Role::System,
                     content: WRITER_SYSTEM.into(),
+                    tool_calls: vec![],
+                    tool_call_id: None,
                 },
                 ChatMessage {
                     role: Role::User,
                     content: input.instruction,
+                    tool_calls: vec![],
+                    tool_call_id: None,
                 },
             ],
             temperature: Some(0.7),
             max_tokens: Some(2048),
+            tools: None,
         };
 
         let response = ctx.chat(&request).await?;
@@ -127,14 +137,19 @@ impl AgentBehavior for Editor {
                 ChatMessage {
                     role: Role::System,
                     content: EDITOR_SYSTEM.into(),
+                    tool_calls: vec![],
+                    tool_call_id: None,
                 },
                 ChatMessage {
                     role: Role::User,
                     content: input.instruction,
+                    tool_calls: vec![],
+                    tool_call_id: None,
                 },
             ],
             temperature: Some(0.3),
             max_tokens: Some(2048),
+            tools: None,
         };
 
         let response = ctx.chat(&request).await?;
@@ -172,6 +187,7 @@ fn agent_spec<B: AgentBehavior>(
                     Some(llm),
                     ctx.cancel,
                     ctx.budget,
+                    ctx.tools,
                 ))
             })
                 as Pin<

@@ -3,10 +3,13 @@ use std::sync::Arc;
 
 use tokio::sync::watch;
 
+use serde_json::Value;
+
 use crate::budget::BudgetTracker;
-use crate::error::AgentError;
+use crate::error::{AgentError, ToolError};
 use crate::ids::AgentId;
 use crate::llm::{LlmProvider, LlmRequest, LlmResponse};
+use crate::tool::{ToolOutput, ToolRegistry};
 
 use super::handle::AgentHandle;
 use super::runner::ProgressState;
@@ -29,6 +32,8 @@ pub struct AgentCtx {
     pub(crate) budget: Option<Arc<BudgetTracker>>,
     /// Progress sender for cooperative heartbeat updates.
     pub(crate) progress_tx: watch::Sender<ProgressState>,
+    /// Registered tools available to this agent.
+    pub tools: ToolRegistry,
 }
 
 impl AgentCtx {
@@ -41,6 +46,12 @@ impl AgentCtx {
             last_progress: tokio::time::Instant::now(),
             busy: true,
         });
+    }
+
+    /// Invoke a tool by name with automatic progress reporting.
+    pub async fn call_tool(&self, name: &str, args: Value) -> Result<ToolOutput, ToolError> {
+        self.report_progress();
+        self.tools.invoke(name, args).await
     }
 
     /// Call LLM with automatic budget enforcement.

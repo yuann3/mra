@@ -38,6 +38,7 @@ fn echo_spec(name: &str) -> ChildSpec {
                     ctx.llm,
                     ctx.cancel,
                     None,
+                    ctx.tools,
                 ))
             })
                 as Pin<
