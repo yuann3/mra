@@ -63,9 +63,9 @@ impl ToolRegistry {
     pub fn register(&mut self, tool: Arc<dyn Tool>) -> Result<(), crate::error::ToolError> {
         let name = tool.spec().name.clone();
         if self.tools.contains_key(&name) {
-            return Err(crate::error::ToolError::InvalidArgs(
-                format!("tool already registered: {name}"),
-            ));
+            return Err(crate::error::ToolError::InvalidArgs(format!(
+                "tool already registered: {name}"
+            )));
         }
         self.tools.insert(name, tool);
         Ok(())

@@ -5,8 +5,8 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use mra::error::ToolError;
+use mra::tool::{ReadFileTool, ShellTool};
 use mra::tool::{Tool, ToolOutput, ToolRegistry, ToolSpec};
-use mra::tool::{ShellTool, ReadFileTool};
 
 /// A simple test tool that echoes its input.
 struct EchoTool {
@@ -107,7 +107,10 @@ fn registry_specs_returns_all_specs() {
 async fn registry_invoke_existing_tool() {
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(EchoTool::new())).unwrap();
-    let result = registry.invoke("echo", json!({"text": "world"})).await.unwrap();
+    let result = registry
+        .invoke("echo", json!({"text": "world"}))
+        .await
+        .unwrap();
     assert_eq!(result.content, "world");
 }
 
@@ -185,7 +188,10 @@ async fn read_file_tool_reads_existing_file() {
 #[tokio::test]
 async fn read_file_tool_error_on_missing_file() {
     let tool = ReadFileTool::new();
-    let result = tool.invoke(json!({"path": "/nonexistent/file.txt"})).await.unwrap();
+    let result = tool
+        .invoke(json!({"path": "/nonexistent/file.txt"}))
+        .await
+        .unwrap();
     assert!(result.is_error);
 }
 
@@ -211,7 +217,9 @@ struct ToolUsingBehavior;
 
 impl AgentBehavior for ToolUsingBehavior {
     async fn handle(&mut self, ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
-        let result = ctx.call_tool("echo", json!({"text": &input.instruction})).await?;
+        let result = ctx
+            .call_tool("echo", json!({"text": &input.instruction}))
+            .await?;
         Ok(AgentReply {
             task_id: input.id,
             output: result.content,
@@ -237,6 +245,10 @@ async fn agent_ctx_call_tool_works() {
         registry,
     );
 
-    let reply = spawned.handle.execute(Task::new("hello from tool")).await.unwrap();
+    let reply = spawned
+        .handle
+        .execute(Task::new("hello from tool"))
+        .await
+        .unwrap();
     assert_eq!(reply.output, "hello from tool");
 }

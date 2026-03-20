@@ -248,16 +248,22 @@ impl LlmProvider for OpenRouterClient {
                 .next()
                 .ok_or_else(|| LlmError::InvalidResponse("no choices returned".into()))?;
 
-            let ApiMessage { content, tool_calls, .. } = choice.message;
+            let ApiMessage {
+                content,
+                tool_calls,
+                ..
+            } = choice.message;
 
             let tool_calls = tool_calls
                 .unwrap_or_default()
                 .into_iter()
                 .map(|tc| {
-                    let arguments = serde_json::from_str(&tc.function.arguments)
-                        .map_err(|e| LlmError::InvalidResponse(format!(
-                            "invalid tool call arguments for {}: {}", tc.function.name, e
-                        )))?;
+                    let arguments = serde_json::from_str(&tc.function.arguments).map_err(|e| {
+                        LlmError::InvalidResponse(format!(
+                            "invalid tool call arguments for {}: {}",
+                            tc.function.name, e
+                        ))
+                    })?;
                     Ok(super::ToolCall {
                         id: tc.id,
                         name: tc.function.name,

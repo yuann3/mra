@@ -75,8 +75,8 @@ impl Tool for ShellTool {
         args: Value,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + '_>> {
         Box::pin(async move {
-            let parsed: ShellArgs = serde_json::from_value(args)
-                .map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+            let parsed: ShellArgs =
+                serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
 
             let result = tokio::time::timeout(self.timeout, async {
                 let child = tokio::process::Command::new("/bin/sh")
@@ -98,9 +98,7 @@ impl Tool for ShellTool {
                 Ok(Ok(output)) => {
                     if output.status.success() {
                         Ok(ToolOutput {
-                            content: truncate(
-                                &String::from_utf8_lossy(&output.stdout),
-                            ),
+                            content: truncate(&String::from_utf8_lossy(&output.stdout)),
                             is_error: false,
                         })
                     } else {

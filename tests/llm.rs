@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use mra::llm::{ChatMessage, LlmProvider, LlmRequest, LlmResponse, OpenRouterClient, Role, ToolCall};
+use mra::llm::{
+    ChatMessage, LlmProvider, LlmRequest, LlmResponse, OpenRouterClient, Role, ToolCall,
+};
 
 #[test]
 fn test_chat_message_construction() {

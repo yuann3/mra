@@ -67,8 +67,8 @@ impl Tool for ReadFileTool {
         args: Value,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + '_>> {
         Box::pin(async move {
-            let parsed: ReadFileArgs = serde_json::from_value(args)
-                .map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+            let parsed: ReadFileArgs =
+                serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
 
             match tokio::fs::read_to_string(&parsed.path).await {
                 Ok(content) => Ok(ToolOutput {
