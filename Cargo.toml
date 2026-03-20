@@ -18,6 +18,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 reqwest = { version = "0.12", features = ["json"] }
 figment = { version = "0.10", features = ["toml", "env"] }
 toml = "0.8"
+schemars = "1"
 
 [[bin]]
 name = "demo"

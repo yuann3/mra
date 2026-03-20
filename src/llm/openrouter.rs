@@ -9,7 +9,7 @@ use std::pin::Pin;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 
-use super::{ChatMessage, LlmProvider, LlmRequest, LlmResponse};
+use super::{LlmProvider, LlmRequest, LlmResponse};
 use crate::error::LlmError;
 
 /// Client for OpenRouter's OpenAI-compatible chat completions API.
@@ -26,11 +26,52 @@ pub struct OpenRouterClient {
 #[derive(Serialize)]
 struct ApiRequest<'a> {
     model: &'a str,
-    messages: &'a [ChatMessage],
+    messages: Vec<ApiOutMessage<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ApiToolSpec<'a>>>,
+}
+
+#[derive(Serialize)]
+struct ApiOutMessage<'a> {
+    role: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<&'a str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<ApiOutToolCall<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct ApiOutToolCall<'a> {
+    id: &'a str,
+    #[serde(rename = "type")]
+    type_: &'static str,
+    function: ApiOutFunction<'a>,
+}
+
+#[derive(Serialize)]
+struct ApiOutFunction<'a> {
+    name: &'a str,
+    arguments: String,
+}
+
+#[derive(Serialize)]
+struct ApiToolSpec<'a> {
+    #[serde(rename = "type")]
+    type_: &'static str,
+    function: ApiToolFunction<'a>,
+}
+
+#[derive(Serialize)]
+struct ApiToolFunction<'a> {
+    name: &'a str,
+    description: &'a str,
+    parameters: &'a serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -46,7 +87,21 @@ struct ApiChoice {
 
 #[derive(Deserialize)]
 struct ApiMessage {
-    content: String,
+    #[serde(default)]
+    content: Option<String>,
+    tool_calls: Option<Vec<ApiToolCall>>,
+}
+
+#[derive(Deserialize)]
+struct ApiToolCall {
+    id: String,
+    function: ApiToolCallFunction,
+}
+
+#[derive(Deserialize)]
+struct ApiToolCallFunction {
+    name: String,
+    arguments: String,
 }
 
 #[derive(Deserialize)]
@@ -102,11 +157,61 @@ impl LlmProvider for OpenRouterClient {
         Box::pin(async move {
             let model = request.model.as_deref().unwrap_or(&self.model);
 
+            let messages: Vec<ApiOutMessage<'_>> = request
+                .messages
+                .iter()
+                .map(|m| {
+                    let role = match m.role {
+                        super::Role::System => "system",
+                        super::Role::User => "user",
+                        super::Role::Assistant => "assistant",
+                        super::Role::Tool => "tool",
+                    };
+                    let content = if m.content.is_empty() && !m.tool_calls.is_empty() {
+                        None
+                    } else {
+                        Some(m.content.as_str())
+                    };
+                    ApiOutMessage {
+                        role,
+                        content,
+                        tool_calls: m
+                            .tool_calls
+                            .iter()
+                            .map(|tc| ApiOutToolCall {
+                                id: &tc.id,
+                                type_: "function",
+                                function: ApiOutFunction {
+                                    name: &tc.name,
+                                    arguments: tc.arguments.to_string(),
+                                },
+                            })
+                            .collect(),
+                        tool_call_id: m.tool_call_id.as_deref(),
+                    }
+                })
+                .collect();
+
+            let tools = request.tools.as_ref().map(|specs| {
+                specs
+                    .iter()
+                    .map(|s| ApiToolSpec {
+                        type_: "function",
+                        function: ApiToolFunction {
+                            name: &s.name,
+                            description: &s.description,
+                            parameters: &s.parameters,
+                        },
+                    })
+                    .collect()
+            });
+
             let api_req = ApiRequest {
                 model,
-                messages: &request.messages,
+                messages,
                 temperature: request.temperature,
                 max_tokens: request.max_tokens,
+                tools,
             };
 
             let resp = self
@@ -143,10 +248,43 @@ impl LlmProvider for OpenRouterClient {
                 .next()
                 .ok_or_else(|| LlmError::InvalidResponse("no choices returned".into()))?;
 
+            let ApiMessage {
+                content,
+                tool_calls,
+                ..
+            } = choice.message;
+
+            let tool_calls = tool_calls
+                .unwrap_or_default()
+                .into_iter()
+                .map(|tc| {
+                    let arguments = serde_json::from_str(&tc.function.arguments).map_err(|e| {
+                        LlmError::InvalidResponse(format!(
+                            "invalid tool call arguments for {}: {}",
+                            tc.function.name, e
+                        ))
+                    })?;
+                    Ok(super::ToolCall {
+                        id: tc.id,
+                        name: tc.function.name,
+                        arguments,
+                    })
+                })
+                .collect::<Result<Vec<_>, LlmError>>()?;
+
+            let content = content.unwrap_or_default();
+
+            if content.is_empty() && tool_calls.is_empty() {
+                return Err(LlmError::InvalidResponse(
+                    "assistant message had neither content nor tool_calls".into(),
+                ));
+            }
+
             Ok(LlmResponse {
-                content: choice.message.content,
+                content,
                 prompt_tokens: api_resp.usage.prompt_tokens,
                 completion_tokens: api_resp.usage.completion_tokens,
+                tool_calls,
             })
         })
     }

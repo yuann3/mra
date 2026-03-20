@@ -14,6 +14,7 @@ use crate::config::AgentConfig;
 use crate::error::SupervisorError;
 use crate::ids::AgentId;
 use crate::llm::LlmProvider;
+use crate::tool::ToolRegistry;
 
 use super::ChildExit;
 use super::config::{ChildRestart, ShutdownPolicy};
@@ -34,6 +35,8 @@ pub struct ChildContext {
     pub llm: Option<Arc<dyn LlmProvider>>,
     /// Shared budget tracker.
     pub budget: Option<Arc<BudgetTracker>>,
+    /// Tool registry for this agent.
+    pub tools: ToolRegistry,
 }
 
 /// What a child factory returns on success.

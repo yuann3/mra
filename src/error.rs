@@ -46,6 +46,10 @@ pub enum AgentError {
     /// error classification for retry/restart decisions.
     #[error(transparent)]
     Llm(#[from] LlmError),
+    /// A tool invocation failed. Wraps the original [`ToolError`] to preserve
+    /// error classification for retry/restart decisions.
+    #[error(transparent)]
+    Tool(#[from] ToolError),
 }
 
 impl AgentError {
@@ -58,6 +62,7 @@ impl AgentError {
             Self::Cancelled => ErrorClass::Cancelled,
             Self::BudgetExceeded => ErrorClass::BudgetExceeded,
             Self::Llm(e) => e.classification(),
+            Self::Tool(e) => e.classification(),
         }
     }
 }
@@ -106,6 +111,9 @@ pub enum ToolError {
     /// No tool with the given name is registered.
     #[error("tool not found: {0}")]
     NotFound(String),
+    /// The arguments passed to a tool were invalid.
+    #[error("invalid tool arguments: {0}")]
+    InvalidArgs(String),
 }
 
 impl ToolError {
@@ -116,6 +124,7 @@ impl ToolError {
             Self::FuelExhausted => ErrorClass::Overload,
             Self::ExecutionFailed(_) => ErrorClass::Transient,
             Self::NotFound(_) => ErrorClass::Permanent,
+            Self::InvalidArgs(_) => ErrorClass::Permanent,
         }
     }
 }

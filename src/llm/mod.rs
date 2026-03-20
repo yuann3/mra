@@ -15,8 +15,10 @@ use std::future::Future;
 use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::error::LlmError;
+use crate::tool::ToolSpec;
 
 /// Role in a chat conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +27,15 @@ pub enum Role {
     System,
     User,
     Assistant,
+    Tool,
+}
+
+/// A tool call requested by the LLM.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
 }
 
 /// A single message in a chat conversation.
@@ -32,6 +43,10 @@ pub enum Role {
 pub struct ChatMessage {
     pub role: Role,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 /// Request payload for an LLM chat completion.
@@ -43,6 +58,7 @@ pub struct LlmRequest {
     pub messages: Vec<ChatMessage>,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
+    pub tools: Option<Vec<ToolSpec>>,
 }
 
 /// Response from an LLM chat completion.
@@ -51,6 +67,7 @@ pub struct LlmResponse {
     pub content: String,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    pub tool_calls: Vec<ToolCall>,
 }
 
 impl LlmResponse {

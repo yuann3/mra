@@ -3,18 +3,21 @@ use std::sync::Arc;
 
 use tokio::sync::watch;
 
+use serde_json::Value;
+
 use crate::budget::BudgetTracker;
-use crate::error::AgentError;
+use crate::error::{AgentError, ToolError};
 use crate::ids::AgentId;
 use crate::llm::{LlmProvider, LlmRequest, LlmResponse};
+use crate::tool::{ToolOutput, ToolRegistry};
 
 use super::handle::AgentHandle;
 use super::runner::ProgressState;
 
 /// Runtime context passed to [`AgentBehavior::handle`](super::AgentBehavior::handle).
 ///
-/// Provides access to the agent's identity, named peer handles for
-/// delegation, an optional shared LLM provider, and budget tracking.
+/// Provides the agent's identity, peer handles for delegation, an
+/// optional LLM provider, budget tracking, and a tool registry.
 pub struct AgentCtx {
     pub id: AgentId,
     /// Human-readable name, used as the key for budget tracking.
@@ -29,6 +32,8 @@ pub struct AgentCtx {
     pub(crate) budget: Option<Arc<BudgetTracker>>,
     /// Progress sender for cooperative heartbeat updates.
     pub(crate) progress_tx: watch::Sender<ProgressState>,
+    /// Registered tools available to this agent.
+    pub tools: ToolRegistry,
 }
 
 impl AgentCtx {
@@ -41,6 +46,21 @@ impl AgentCtx {
             last_progress: tokio::time::Instant::now(),
             busy: true,
         });
+    }
+
+    /// Invokes a tool by name, sending heartbeats every second so the
+    /// supervisor doesn't mistake a long-running tool for a hung agent.
+    pub async fn call_tool(&self, name: &str, args: Value) -> Result<ToolOutput, ToolError> {
+        let invoke = self.tools.invoke(name, args);
+        tokio::pin!(invoke);
+        let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(1));
+
+        loop {
+            tokio::select! {
+                result = &mut invoke => break result,
+                _ = heartbeat.tick() => self.report_progress(),
+            }
+        }
     }
 
     /// Call LLM with automatic budget enforcement.

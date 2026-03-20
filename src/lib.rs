@@ -22,3 +22,4 @@ pub mod ids;
 pub mod llm;
 pub mod runtime;
 pub mod supervisor;
+pub mod tool;

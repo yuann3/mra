@@ -110,6 +110,21 @@ fn test_agent_error_llm_timeout_is_transient() {
 }
 
 #[test]
+fn tool_error_invalid_args_is_permanent() {
+    assert_eq!(
+        ToolError::InvalidArgs("bad input".into()).classification(),
+        ErrorClass::Permanent
+    );
+}
+
+#[test]
+fn agent_error_tool_variant_preserves_classification() {
+    let tool_err = ToolError::ExecutionFailed("cmd failed".into());
+    let agent_err = AgentError::Tool(tool_err);
+    assert_eq!(agent_err.classification(), ErrorClass::Transient);
+}
+
+#[test]
 fn errors_implement_std_error() {
     fn assert_std_error<T: std::error::Error>() {}
     assert_std_error::<AgentError>();
