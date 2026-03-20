@@ -1,4 +1,5 @@
-//! Shell command tool.
+//! Shell command tool -- runs a command via `/bin/sh -c` with a
+//! configurable timeout, output truncation (32 KB), and `kill_on_drop`.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -36,6 +37,11 @@ fn truncate(s: &str) -> String {
     }
 }
 
+/// Runs shell commands on the host. The child process is killed if
+/// the timeout expires or the future is dropped.
+///
+/// Output (stdout on success, stderr on failure) is capped at 32 KB
+/// with UTF-8-safe truncation.
 pub struct ShellTool {
     spec: ToolSpec,
     timeout: Duration,
@@ -48,10 +54,12 @@ impl Default for ShellTool {
 }
 
 impl ShellTool {
+    /// Creates a `ShellTool` with a 30-second timeout.
     pub fn new() -> Self {
         Self::with_timeout(Duration::from_secs(30))
     }
 
+    /// Creates a `ShellTool` with a custom timeout.
     pub fn with_timeout(timeout: Duration) -> Self {
         let schema = schemars::schema_for!(ShellArgs);
         Self {

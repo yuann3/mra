@@ -1,4 +1,5 @@
-//! File reading tool.
+//! File reading tool -- reads a file by path and returns its contents,
+//! truncated to 64 KB with UTF-8-safe boundary handling.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -34,6 +35,11 @@ struct ReadFileArgs {
     path: String,
 }
 
+/// Reads a file from disk and returns its contents as a string.
+///
+/// Output is capped at 64 KB. I/O errors (missing file, permission
+/// denied, etc.) are returned as `ToolOutput { is_error: true }` so
+/// the LLM sees the error message instead of crashing the tool call.
 pub struct ReadFileTool {
     spec: ToolSpec,
 }
@@ -45,6 +51,7 @@ impl Default for ReadFileTool {
 }
 
 impl ReadFileTool {
+    /// Creates a new `ReadFileTool`.
     pub fn new() -> Self {
         let schema = schemars::schema_for!(ReadFileArgs);
         Self {

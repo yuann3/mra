@@ -16,8 +16,8 @@ use super::runner::ProgressState;
 
 /// Runtime context passed to [`AgentBehavior::handle`](super::AgentBehavior::handle).
 ///
-/// Provides access to the agent's identity, named peer handles for
-/// delegation, an optional shared LLM provider, and budget tracking.
+/// Provides the agent's identity, peer handles for delegation, an
+/// optional LLM provider, budget tracking, and a tool registry.
 pub struct AgentCtx {
     pub id: AgentId,
     /// Human-readable name, used as the key for budget tracking.
@@ -48,7 +48,8 @@ impl AgentCtx {
         });
     }
 
-    /// Invoke a tool by name with automatic progress reporting.
+    /// Invokes a tool by name, sending heartbeats every second so the
+    /// supervisor doesn't mistake a long-running tool for a hung agent.
     pub async fn call_tool(&self, name: &str, args: Value) -> Result<ToolOutput, ToolError> {
         let invoke = self.tools.invoke(name, args);
         tokio::pin!(invoke);

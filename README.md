@@ -97,6 +97,36 @@ while let Ok(event) = events.recv().await {
 }
 ```
 
+## Tools
+
+Agents can call tools during their `handle` loop. A tool is anything that implements the `Tool` trait -- an async function that takes JSON arguments and returns text output. The LLM sees the tool's name, description, and JSON Schema parameters, then decides when to call it.
+
+Two built-in tools ship out of the box:
+
+- **`ShellTool`** -- runs a shell command via `/bin/sh -c`. Configurable timeout (default 30s), `kill_on_drop`, output capped at 32 KB.
+- **`ReadFileTool`** -- reads a file and returns its contents, capped at 64 KB.
+
+Register tools in a `ToolRegistry` and pass it when spawning the agent:
+
+```rust
+use std::sync::Arc;
+use mra::tool::{ToolRegistry, ShellTool, ReadFileTool};
+
+let mut tools = ToolRegistry::new();
+tools.register(Arc::new(ShellTool::new())).unwrap();
+tools.register(Arc::new(ReadFileTool::new())).unwrap();
+```
+
+Inside a behavior handler, call tools through `ctx.call_tool()`. This sends periodic heartbeats to the supervisor while the tool runs, so long commands don't trigger hang detection:
+
+```rust
+let output = ctx.call_tool("shell", serde_json::json!({
+    "command": "ls -la"
+})).await?;
+```
+
+The tool specs are available via `ctx.tools.specs()` for forwarding to the LLM in an `LlmRequest`.
+
 ## Running the demo
 
 Set up your OpenRouter API key:
