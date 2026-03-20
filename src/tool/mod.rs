@@ -72,7 +72,9 @@ impl ToolRegistry {
     }
 
     pub fn specs(&self) -> Vec<&ToolSpec> {
-        self.tools.values().map(|t| t.spec()).collect()
+        let mut specs: Vec<_> = self.tools.values().map(|t| t.spec()).collect();
+        specs.sort_by(|a, b| a.name.cmp(&b.name));
+        specs
     }
 
     pub fn get(&self, name: &str) -> Option<&Arc<dyn Tool>> {

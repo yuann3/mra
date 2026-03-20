@@ -46,6 +46,10 @@ pub enum AgentError {
     /// error classification for retry/restart decisions.
     #[error(transparent)]
     Llm(#[from] LlmError),
+    /// A tool invocation failed. Wraps the original [`ToolError`] to preserve
+    /// error classification for retry/restart decisions.
+    #[error(transparent)]
+    Tool(#[from] ToolError),
 }
 
 impl AgentError {
@@ -58,6 +62,7 @@ impl AgentError {
             Self::Cancelled => ErrorClass::Cancelled,
             Self::BudgetExceeded => ErrorClass::BudgetExceeded,
             Self::Llm(e) => e.classification(),
+            Self::Tool(e) => e.classification(),
         }
     }
 }

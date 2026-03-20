@@ -248,27 +248,37 @@ impl LlmProvider for OpenRouterClient {
                 .next()
                 .ok_or_else(|| LlmError::InvalidResponse("no choices returned".into()))?;
 
+            let ApiMessage { content, tool_calls, .. } = choice.message;
+
+            let tool_calls = tool_calls
+                .unwrap_or_default()
+                .into_iter()
+                .map(|tc| {
+                    let arguments = serde_json::from_str(&tc.function.arguments)
+                        .map_err(|e| LlmError::InvalidResponse(format!(
+                            "invalid tool call arguments for {}: {}", tc.function.name, e
+                        )))?;
+                    Ok(super::ToolCall {
+                        id: tc.id,
+                        name: tc.function.name,
+                        arguments,
+                    })
+                })
+                .collect::<Result<Vec<_>, LlmError>>()?;
+
+            let content = content.unwrap_or_default();
+
+            if content.is_empty() && tool_calls.is_empty() {
+                return Err(LlmError::InvalidResponse(
+                    "assistant message had neither content nor tool_calls".into(),
+                ));
+            }
+
             Ok(LlmResponse {
-                content: choice.message.content.unwrap_or_default(),
+                content,
                 prompt_tokens: api_resp.usage.prompt_tokens,
                 completion_tokens: api_resp.usage.completion_tokens,
-                tool_calls: choice
-                    .message
-                    .tool_calls
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|tc| {
-                        let arguments = serde_json::from_str(&tc.function.arguments)
-                            .map_err(|e| LlmError::InvalidResponse(format!(
-                                "invalid tool call arguments for {}: {}", tc.function.name, e
-                            )))?;
-                        Ok(super::ToolCall {
-                            id: tc.id,
-                            name: tc.function.name,
-                            arguments,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, LlmError>>()?,
+                tool_calls,
             })
         })
     }

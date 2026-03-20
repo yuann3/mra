@@ -50,8 +50,16 @@ impl AgentCtx {
 
     /// Invoke a tool by name with automatic progress reporting.
     pub async fn call_tool(&self, name: &str, args: Value) -> Result<ToolOutput, ToolError> {
-        self.report_progress();
-        self.tools.invoke(name, args).await
+        let invoke = self.tools.invoke(name, args);
+        tokio::pin!(invoke);
+        let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(1));
+
+        loop {
+            tokio::select! {
+                result = &mut invoke => break result,
+                _ = heartbeat.tick() => self.report_progress(),
+            }
+        }
     }
 
     /// Call LLM with automatic budget enforcement.

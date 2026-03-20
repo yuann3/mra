@@ -26,7 +26,11 @@ fn truncate(s: &str) -> String {
     if s.len() <= MAX_OUTPUT_BYTES {
         s.to_string()
     } else {
-        let mut out = s[..MAX_OUTPUT_BYTES].to_string();
+        let mut end = MAX_OUTPUT_BYTES;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        let mut out = s[..end].to_string();
         out.push_str("\n...[truncated]");
         out
     }

@@ -211,8 +211,7 @@ struct ToolUsingBehavior;
 
 impl AgentBehavior for ToolUsingBehavior {
     async fn handle(&mut self, ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
-        let result = ctx.call_tool("echo", json!({"text": &input.instruction})).await
-            .map_err(|e| AgentError::HandlerFailed(e.to_string()))?;
+        let result = ctx.call_tool("echo", json!({"text": &input.instruction})).await?;
         Ok(AgentReply {
             task_id: input.id,
             output: result.content,
