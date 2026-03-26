@@ -1,13 +1,10 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
 use std::time::Duration;
 
-use mra::agent::{AgentBehavior, AgentCtx, AgentHandle, AgentReply, Task};
+use mra::agent::{AgentBehavior, AgentCtx, AgentReply, Task};
 use mra::config::AgentConfig;
 use mra::error::AgentError;
 use mra::runtime::SwarmRuntime;
-use mra::supervisor::{ChildContext, ChildSpec, SpawnedChild, SupervisorConfig};
+use mra::supervisor::{ChildSpec, SupervisorConfig};
 
 struct EchoBehavior;
 
@@ -23,32 +20,7 @@ impl AgentBehavior for EchoBehavior {
 }
 
 fn echo_spec(name: &str) -> ChildSpec {
-    let agent_name = name.to_string();
-    ChildSpec::new(
-        name,
-        AgentConfig::new(name),
-        Arc::new(move |ctx: ChildContext| {
-            let agent_name = agent_name.clone();
-            Box::pin(async move {
-                Ok(AgentHandle::spawn_child(
-                    ctx.id,
-                    AgentConfig::new(&agent_name),
-                    EchoBehavior,
-                    ctx.peers,
-                    ctx.llm,
-                    ctx.cancel,
-                    None,
-                    ctx.tools,
-                ))
-            })
-                as Pin<
-                    Box<
-                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
-                            + Send,
-                    >,
-                >
-        }),
-    )
+    ChildSpec::from_behavior(AgentConfig::new(name), |_| EchoBehavior)
 }
 
 #[tokio::test]

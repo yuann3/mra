@@ -21,7 +21,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mra::agent::{AgentBehavior, AgentCtx, AgentHandle, AgentReply, Task};
+use mra::agent::{AgentBehavior, AgentCtx, AgentReply, AgentSpawn, Task};
 use mra::config::{AgentConfig, MraConfig};
 use mra::error::AgentError;
 use mra::llm::{ChatMessage, LlmProvider, LlmRequest, OpenRouterClient, Role};
@@ -168,23 +168,23 @@ fn build_tool_registry() -> ToolRegistry {
 /// Builds a [`ChildSpec`] for the coder agent. The tools are passed
 /// into the factory closure so they survive supervisor restarts.
 fn coder_spec(llm: Arc<dyn LlmProvider>, tools: ToolRegistry) -> ChildSpec {
+    let config = AgentConfig::new("coder");
     ChildSpec::new(
         "coder",
-        AgentConfig::new("coder"),
+        config.clone(),
         Arc::new(move |ctx: ChildContext| {
             let llm = llm.clone();
             let tools = tools.clone();
+            let config = config.clone();
             Box::pin(async move {
-                Ok(AgentHandle::spawn_child(
-                    ctx.id,
-                    AgentConfig::new("coder"),
-                    Coder,
-                    ctx.peers,
-                    Some(llm),
-                    ctx.cancel,
-                    ctx.budget,
-                    tools,
-                ))
+                Ok(AgentSpawn::from_config(config, Coder)
+                    .id(ctx.id)
+                    .cancel(ctx.cancel)
+                    .peers(ctx.peers)
+                    .llm(llm)
+                    .budget_opt(ctx.budget)
+                    .tools(tools)
+                    .spawn_child())
             })
                 as Pin<
                     Box<

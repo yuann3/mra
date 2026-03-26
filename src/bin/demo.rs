@@ -19,7 +19,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mra::agent::{AgentBehavior, AgentCtx, AgentHandle, AgentReply, Task};
+use mra::agent::{AgentBehavior, AgentCtx, AgentReply, AgentSpawn, Task};
 use mra::config::{AgentConfig, MraConfig};
 use mra::error::AgentError;
 use mra::llm::{ChatMessage, LlmProvider, LlmRequest, OpenRouterClient, Role};
@@ -170,25 +170,23 @@ fn agent_spec<B: AgentBehavior>(
     llm: Arc<dyn LlmProvider>,
     behavior_fn: fn() -> B,
 ) -> ChildSpec {
-    let agent_name = name.to_string();
+    let config = AgentConfig::new(name);
     ChildSpec::new(
         name,
-        AgentConfig::new(name),
+        config.clone(),
         Arc::new(move |ctx: ChildContext| {
             let llm = llm.clone();
-            let agent_name = agent_name.clone();
+            let config = config.clone();
             let behavior = behavior_fn();
             Box::pin(async move {
-                Ok(AgentHandle::spawn_child(
-                    ctx.id,
-                    AgentConfig::new(&agent_name),
-                    behavior,
-                    ctx.peers, // Supervisor populates this with alive siblings
-                    Some(llm),
-                    ctx.cancel,
-                    ctx.budget,
-                    ctx.tools,
-                ))
+                Ok(AgentSpawn::from_config(config, behavior)
+                    .id(ctx.id)
+                    .cancel(ctx.cancel)
+                    .peers(ctx.peers)
+                    .llm(llm)
+                    .budget_opt(ctx.budget)
+                    .tools(ctx.tools)
+                    .spawn_child())
             })
                 as Pin<
                     Box<

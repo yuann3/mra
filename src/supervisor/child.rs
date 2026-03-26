@@ -131,6 +131,51 @@ impl ChildSpec {
         }
     }
 
+    /// Creates a `ChildSpec` from a closure that returns a behavior.
+    ///
+    /// This is the common case: the factory just needs to produce a fresh
+    /// behavior value on each start/restart. All `ChildContext` fields
+    /// (peers, llm, cancel, budget, tools) are forwarded automatically.
+    ///
+    /// The spec name is derived from `config.name` — single source of truth.
+    ///
+    /// **Note:** The factory captures a clone of `config` at construction time.
+    /// Mutating `self.config` after construction will not affect the factory's
+    /// copy. In practice this is not a problem because `ChildSpec` is consumed
+    /// by [`SupervisorHandle::start_child`] and not mutated after construction.
+    ///
+    /// ```ignore
+    /// ChildSpec::from_behavior(AgentConfig::new("echo"), |_| EchoBehavior)
+    /// ```
+    pub fn from_behavior<B, F>(config: AgentConfig, make_behavior: F) -> Self
+    where
+        B: crate::agent::AgentBehavior,
+        F: Fn(&ChildContext) -> B + Send + Sync + 'static,
+    {
+        use crate::agent::AgentSpawn;
+
+        let name = config.name.clone();
+        Self::new(
+            &name,
+            config.clone(),
+            Arc::new(move |ctx: ChildContext| {
+                let behavior = make_behavior(&ctx);
+                let config = config.clone();
+                Box::pin(async move {
+                    Ok(AgentSpawn::from_config(config, behavior)
+                        .with_child_ctx(ctx)
+                        .spawn_child())
+                })
+                    as Pin<
+                        Box<
+                            dyn Future<Output = Result<SpawnedChild, SupervisorError>>
+                                + Send,
+                        >,
+                    >
+            }),
+        )
+    }
+
     /// Sets the restart strategy.
     pub fn with_restart(mut self, restart: ChildRestart) -> Self {
         self.restart = restart;

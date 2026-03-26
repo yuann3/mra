@@ -17,6 +17,7 @@ mod handle;
 pub(crate) mod mailbox;
 mod message;
 mod runner;
+mod spawn;
 
 use crate::error::AgentError;
 
@@ -25,6 +26,7 @@ pub use handle::AgentHandle;
 pub(crate) use message::AgentMessage;
 pub use message::{AgentReply, Task};
 pub use runner::{ProgressState, SpawnedAgent};
+pub use spawn::AgentSpawn;
 
 /// Defines how an agent processes incoming [`Task`]s.
 ///
