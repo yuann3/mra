@@ -12,13 +12,20 @@ If you've used Erlang/OTP, this is that idea applied to LLM pipelines, in Rust.
 
 ## Quick look
 
-A writer agent that calls an LLM, then passes the result to an editor agent:
+Spawn an agent in two lines:
 
 ```rust
-use mra::agent::{AgentBehavior, AgentCtx, AgentReply, Task};
-use mra::error::AgentError;
-use mra::llm::{ChatMessage, LlmRequest, Role};
+use mra::agent::AgentSpawn;
 
+let spawned = AgentSpawn::new("writer", WriterBehavior).llm(llm).spawn();
+let reply = spawned.handle.execute(Task::new("write something")).await?;
+```
+
+`AgentSpawn` is a typed builder. Only a name and behavior are required -- everything else (LLM, tools, budget, peers) defaults to empty/None. Chain setters for what you need, then call `.spawn()` for a standalone task or `.spawn_child()` for supervisor-managed agents.
+
+Here's a behavior that calls an LLM and delegates to a peer:
+
+```rust
 struct Writer;
 
 impl AgentBehavior for Writer {
@@ -27,16 +34,16 @@ impl AgentBehavior for Writer {
         ctx: &mut AgentCtx,
         input: Task,
     ) -> Result<AgentReply, AgentError> {
-        let llm = ctx.llm.as_ref().expect("no llm");
-        let response = llm.chat(&LlmRequest {
+        let response = ctx.chat(&LlmRequest {
             model: None,
             messages: vec![
-                ChatMessage { role: Role::System, content: "You are a writer.".into() },
-                ChatMessage { role: Role::User, content: input.instruction },
+                ChatMessage { role: Role::System, content: "You are a writer.".into(), tool_calls: vec![], tool_call_id: None },
+                ChatMessage { role: Role::User, content: input.instruction, tool_calls: vec![], tool_call_id: None },
             ],
             temperature: Some(0.7),
             max_tokens: Some(2048),
-        }).await.map_err(AgentError::Llm)?;
+            tools: None,
+        }).await?;
 
         // The supervisor injects peer handles automatically
         let editor = ctx.peers.get("editor").expect("editor peer");
@@ -45,7 +52,8 @@ impl AgentBehavior for Writer {
         Ok(AgentReply {
             task_id: input.id,
             output: reply.output,
-            tokens_used: response.total_tokens() + reply.tokens_used,
+            self_tokens: response.total_tokens(),
+            total_tokens: response.total_tokens() + reply.total_tokens,
         })
     }
 }
@@ -72,15 +80,21 @@ Other stuff the supervisor handles:
 - Hot-swap mailbox via `ArcSwap` -- when an agent restarts, existing handles keep working because the supervisor swaps the new channel sender into the same stable slot
 
 ```rust
+use mra::config::AgentConfig;
 use mra::runtime::SwarmRuntime;
 use mra::supervisor::{ChildSpec, ChildRestart, SupervisorConfig};
 
 let runtime = SwarmRuntime::new(SupervisorConfig::default());
 
+// ChildSpec::from_behavior handles all the factory boilerplate.
+// Just give it a config and a closure that returns a behavior.
+let editor_spec = ChildSpec::from_behavior(AgentConfig::new("editor"), |_| Editor)
+    .with_restart(ChildRestart::Permanent);
+
 // Spawn in dependency order. The supervisor populates ctx.peers
 // with whatever siblings are already alive.
-runtime.spawn(agent_spec("editor", llm.clone(), || Editor)).await?;
-runtime.spawn(agent_spec("writer", llm.clone(), || Writer)).await?;
+runtime.spawn(editor_spec).await?;
+runtime.spawn(ChildSpec::from_behavior(AgentConfig::new("writer"), |_| Writer)).await?;
 ```
 
 You can subscribe to lifecycle events:
@@ -106,15 +120,21 @@ Two built-in tools ship out of the box:
 - **`ShellTool`** -- runs a shell command via `/bin/sh -c`. Configurable timeout (default 30s), `kill_on_drop`, output capped at 32 KB.
 - **`ReadFileTool`** -- reads a file and returns its contents, capped at 64 KB.
 
-Register tools in a `ToolRegistry` and pass it when spawning the agent:
+Register tools in a `ToolRegistry` and pass it to the builder:
 
 ```rust
 use std::sync::Arc;
+use mra::agent::AgentSpawn;
 use mra::tool::{ToolRegistry, ShellTool, ReadFileTool};
 
 let mut tools = ToolRegistry::new();
 tools.register(Arc::new(ShellTool::new())).unwrap();
 tools.register(Arc::new(ReadFileTool::new())).unwrap();
+
+let spawned = AgentSpawn::new("coder", CoderBehavior)
+    .llm(llm)
+    .tools(tools)
+    .spawn();
 ```
 
 Inside a behavior handler, call tools through `ctx.call_tool()`. This sends periodic heartbeats to the supervisor while the tool runs, so long commands don't trigger hang detection:
@@ -175,5 +195,7 @@ Each agent is two pieces:
 
 - `AgentHandle` -- the external API. Cloneable, `Send + Sync`. Sends tasks through a bounded `mpsc` channel routed through an `ArcSwap` mailbox slot.
 - `AgentRunner` -- the internal loop. Owns mutable state, receives messages, calls your `AgentBehavior::handle`. Runs inside the supervisor's `JoinSet`.
+
+`AgentSpawn` wires these together. You give it a name and behavior, optionally set LLM/tools/budget/peers, and call `.spawn()`. For supervised agents, `ChildSpec::from_behavior` wraps the builder so you don't have to write factory closures by hand.
 
 The `ArcSwap` mailbox slot is what makes restarts transparent. When an agent dies and the supervisor respawns it, the new `mpsc::Sender` gets swapped into the same slot. Anyone holding an `AgentHandle` -- peers, external code, whoever -- keeps sending to the same stable address. They never know the agent restarted.
