@@ -20,7 +20,7 @@ mod runner;
 
 use crate::error::AgentError;
 
-pub use ctx::AgentCtx;
+pub use ctx::{AgentCtx, ToolLoopResult};
 pub use handle::AgentHandle;
 pub(crate) use message::AgentMessage;
 pub use message::{AgentReply, Task};

@@ -68,12 +68,15 @@ impl SwarmRuntime {
 
     /// Returns current global token usage, if a budget is configured.
     pub fn token_usage(&self) -> Option<RunUsage> {
-        self.budget.as_ref().map(|b| b.run_usage())
+        self.budget.clone().map(|b| b.run_usage())
     }
 
     /// Returns per-agent token usage, if a budget is configured.
     pub fn agent_token_usage(&self, name: &str) -> Option<AgentUsage> {
-        self.budget.as_ref().and_then(|b| b.agent_usage(name))
+        match self.budget.clone() {
+            Some(b) => b.agent_usage(name),
+            None => None,
+        }
     }
 
     /// Gracefully shuts down all agents and the supervisor.
