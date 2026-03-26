@@ -219,7 +219,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Subscribe to supervisor events
     let mut events = runtime.subscribe();
-    tokio::spawn(async move {
+    let event_task = tokio::spawn(async move {
         while let Ok(event) = events.recv().await {
             match event {
                 SupervisorEvent::SupervisorStarted => {
@@ -299,5 +299,6 @@ async fn main() -> anyhow::Result<()> {
     }
 
     runtime.shutdown().await;
+    let _ = event_task.await;
     Ok(())
 }

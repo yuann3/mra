@@ -311,6 +311,45 @@ async fn edit_file_tool_deny_unknown_fields() {
 }
 
 #[tokio::test]
+async fn edit_file_tool_empty_old_text() {
+    let tool = mra::tool::EditFileTool::new();
+    let result = tool
+        .invoke(json!({
+            "path": "any.txt",
+            "old_text": "",
+            "new_text": "something"
+        }))
+        .await
+        .unwrap();
+
+    assert!(result.is_error);
+    assert!(result.content.contains("non-empty"));
+}
+
+#[tokio::test]
+async fn edit_file_tool_overlapping_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("test.txt");
+    // "aba" appears twice with overlap in "ababa"
+    std::fs::write(&path, "ababa").unwrap();
+
+    let tool = mra::tool::EditFileTool::new();
+    let result = tool
+        .invoke(json!({
+            "path": path.to_str().unwrap(),
+            "old_text": "aba",
+            "new_text": "x"
+        }))
+        .await
+        .unwrap();
+
+    assert!(result.is_error);
+    assert!(result.content.contains("2 times"));
+    // File unchanged
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "ababa");
+}
+
+#[tokio::test]
 async fn edit_file_tool_unicode_content() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("test.txt");

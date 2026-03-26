@@ -74,6 +74,13 @@ impl Tool for EditFileTool {
             let parsed: EditFileArgs =
                 serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
 
+            if parsed.old_text.is_empty() {
+                return Ok(ToolOutput {
+                    content: "old_text must be non-empty".into(),
+                    is_error: true,
+                });
+            }
+
             let content = match tokio::fs::read_to_string(&parsed.path).await {
                 Ok(c) => c,
                 Err(e) => {
@@ -84,7 +91,16 @@ impl Tool for EditFileTool {
                 }
             };
 
-            let count = content.matches(&parsed.old_text).count();
+            // Count overlapping occurrences by advancing one character at a time.
+            let mut count = 0usize;
+            for (idx, _) in content.char_indices() {
+                if content[idx..].starts_with(&parsed.old_text) {
+                    count += 1;
+                    if count > 1 {
+                        break;
+                    }
+                }
+            }
 
             if count == 0 {
                 return Ok(ToolOutput {

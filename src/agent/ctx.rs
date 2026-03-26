@@ -136,7 +136,6 @@ impl AgentCtx {
         let mut total_prompt = 0u64;
         let mut total_completion = 0u64;
         let mut iterations = 0usize;
-        let mut last_response: Option<LlmResponse> = None;
 
         for _ in 0..max_iterations {
             let req = LlmRequest {
@@ -152,7 +151,9 @@ impl AgentCtx {
             total_prompt += response.prompt_tokens;
             total_completion += response.completion_tokens;
 
-            if response.tool_calls.is_empty() {
+            if response.tool_calls.is_empty() || iterations == max_iterations {
+                // Either the LLM is done, or we've hit the iteration cap.
+                // Don't execute tools on the final iteration.
                 return Ok(ToolLoopResult {
                     response,
                     iterations,
@@ -187,19 +188,12 @@ impl AgentCtx {
                 });
             }
 
-            last_response = Some(response);
             self.report_progress();
         }
 
-        // Max iterations reached — return last response as-is
-        let response = last_response.ok_or_else(|| {
-            AgentError::HandlerFailed("chat_with_tools called with max_iterations = 0".into())
-        })?;
-        Ok(ToolLoopResult {
-            response,
-            iterations,
-            total_prompt_tokens: total_prompt,
-            total_completion_tokens: total_completion,
-        })
+        // max_iterations == 0: nothing to do
+        Err(AgentError::HandlerFailed(
+            "chat_with_tools called with max_iterations = 0".into(),
+        ))
     }
 }
