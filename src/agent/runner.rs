@@ -32,7 +32,7 @@ pub struct ProgressState {
     pub busy: bool,
 }
 
-/// Returned by [`AgentSpawn::spawn`]. Bundles everything needed to
+/// Returned by [`crate::agent::AgentSpawn::spawn`]. Bundles everything needed to
 /// interact with and monitor a running agent.
 pub struct SpawnedAgent {
     /// Cloneable handle for sending tasks and shutdown signals.

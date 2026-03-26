@@ -41,9 +41,7 @@ impl AgentBehavior for SlowBehavior {
 async fn test_agent_execute() {
     let cancel = CancellationToken::new();
 
-    let spawned = AgentSpawn::new("echo", EchoBehavior)
-        .cancel(cancel)
-        .spawn();
+    let spawned = AgentSpawn::new("echo", EchoBehavior).cancel(cancel).spawn();
 
     let task = Task::new("hello world");
     let reply = spawned.handle.execute(task).await.unwrap();
@@ -57,9 +55,7 @@ async fn test_agent_execute() {
 async fn test_agent_shutdown() {
     let cancel = CancellationToken::new();
 
-    let spawned = AgentSpawn::new("echo", EchoBehavior)
-        .cancel(cancel)
-        .spawn();
+    let spawned = AgentSpawn::new("echo", EchoBehavior).cancel(cancel).spawn();
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     spawned.handle.shutdown(deadline).await;
@@ -73,9 +69,7 @@ async fn test_agent_shutdown() {
 async fn test_agent_cancel() {
     let cancel = CancellationToken::new();
 
-    let spawned = AgentSpawn::new("echo", EchoBehavior)
-        .cancel(cancel)
-        .spawn();
+    let spawned = AgentSpawn::new("echo", EchoBehavior).cancel(cancel).spawn();
 
     spawned.handle.cancel();
 
@@ -159,9 +153,7 @@ async fn test_agent_progress_updates() {
 async fn test_agent_execute_after_channel_closed() {
     let cancel = CancellationToken::new();
 
-    let spawned = AgentSpawn::new("echo", EchoBehavior)
-        .cancel(cancel)
-        .spawn();
+    let spawned = AgentSpawn::new("echo", EchoBehavior).cancel(cancel).spawn();
 
     // Cancel the agent so it stops
     spawned.handle.cancel();

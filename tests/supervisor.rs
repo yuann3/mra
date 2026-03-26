@@ -216,14 +216,16 @@ async fn test_supervisor_restarts_crashed_transient_child() {
                         ChildExit::Failed("crash".into())
                     })))
                 } else {
-                    Ok(AgentSpawn::from_config(AgentConfig::new("crasher"), EchoBehavior)
-                        .id(ctx.id)
-                        .cancel(ctx.cancel)
-                        .peers(ctx.peers)
-                        .llm_opt(ctx.llm)
-                        .budget_opt(ctx.budget)
-                        .tools(ctx.tools)
-                        .spawn_child())
+                    Ok(
+                        AgentSpawn::from_config(AgentConfig::new("crasher"), EchoBehavior)
+                            .id(ctx.id)
+                            .cancel(ctx.cancel)
+                            .peers(ctx.peers)
+                            .llm_opt(ctx.llm)
+                            .budget_opt(ctx.budget)
+                            .tools(ctx.tools)
+                            .spawn_child(),
+                    )
                 }
             })
                 as Pin<
@@ -460,14 +462,16 @@ async fn test_supervisor_detects_hung_agent() {
         AgentConfig::new("hanger"),
         Arc::new(move |ctx: ChildContext| {
             Box::pin(async move {
-                Ok(AgentSpawn::from_config(AgentConfig::new("hanger"), HangBehavior)
-                    .id(ctx.id)
-                    .cancel(ctx.cancel)
-                    .peers(ctx.peers)
-                    .llm_opt(ctx.llm)
-                    .budget_opt(ctx.budget)
-                    .tools(ctx.tools)
-                    .spawn_child())
+                Ok(
+                    AgentSpawn::from_config(AgentConfig::new("hanger"), HangBehavior)
+                        .id(ctx.id)
+                        .cancel(ctx.cancel)
+                        .peers(ctx.peers)
+                        .llm_opt(ctx.llm)
+                        .budget_opt(ctx.budget)
+                        .tools(ctx.tools)
+                        .spawn_child(),
+                )
             })
                 as Pin<
                     Box<

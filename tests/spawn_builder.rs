@@ -57,7 +57,9 @@ async fn spawn_with_peers_enables_delegation() {
             input: Task,
         ) -> Result<AgentReply, AgentError> {
             let echo = ctx.peers.get("echo").unwrap();
-            let reply = echo.execute(Task::new(format!("via: {}", input.instruction))).await?;
+            let reply = echo
+                .execute(Task::new(format!("via: {}", input.instruction)))
+                .await?;
             Ok(AgentReply {
                 task_id: input.id,
                 output: reply.output,
@@ -159,14 +161,23 @@ async fn spawn_child_works_under_supervisor() {
         AgentConfig::new("echo"),
         Arc::new(|ctx: ChildContext| {
             Box::pin(async move {
-                Ok(AgentSpawn::from_config(AgentConfig::new("echo"), EchoBehavior)
-                    .id(ctx.id)
-                    .cancel(ctx.cancel)
-                    .peers(ctx.peers)
-                    .tools(ctx.tools)
-                    .spawn_child())
+                Ok(
+                    AgentSpawn::from_config(AgentConfig::new("echo"), EchoBehavior)
+                        .id(ctx.id)
+                        .cancel(ctx.cancel)
+                        .peers(ctx.peers)
+                        .llm_opt(ctx.llm)
+                        .budget_opt(ctx.budget)
+                        .tools(ctx.tools)
+                        .spawn_child(),
+                )
             })
-                as Pin<Box<dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>> + Send>>
+                as Pin<
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
+                >
         }),
     );
 
