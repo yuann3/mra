@@ -48,8 +48,7 @@ impl Default for EditFileTool {
 }
 
 impl EditFileTool {
-    /// Creates a new `EditFileTool` with an auto-generated JSON Schema
-    /// derived from [`EditFileArgs`].
+    /// Creates a new `EditFileTool` with an auto-generated JSON Schema.
     pub fn new() -> Self {
         let schema = schemars::schema_for!(EditFileArgs);
         Self {
