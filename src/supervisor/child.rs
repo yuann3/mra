@@ -44,7 +44,7 @@ pub struct ChildContext {
 /// Contains the future to spawn (supervisor will spawn via `JoinSet`),
 /// the progress watch receiver, and the mpsc sender for the mailbox.
 ///
-/// Constructed via [`AgentHandle::spawn_child`] — not directly by user code.
+/// Constructed via [`AgentSpawn::spawn_child`] — not directly by user code.
 pub struct SpawnedChild {
     /// The agent's run future. Supervisor spawns this in its `JoinSet`.
     pub(crate) future: Pin<Box<dyn Future<Output = ChildExit> + Send>>,

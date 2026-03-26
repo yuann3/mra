@@ -128,6 +128,7 @@ impl<B: AgentBehavior> AgentSpawn<B> {
     }
 
     /// Spawns the agent as an independent Tokio task.
+    #[allow(deprecated)]
     pub fn spawn(self) -> SpawnedAgent {
         AgentHandle::spawn(
             self.id,
@@ -145,6 +146,7 @@ impl<B: AgentBehavior> AgentSpawn<B> {
     ///
     /// Returns a [`SpawnedChild`] whose future the supervisor
     /// spawns via its own `JoinSet`.
+    #[allow(deprecated)]
     pub fn spawn_child(self) -> SpawnedChild {
         AgentHandle::spawn_child(
             self.id,

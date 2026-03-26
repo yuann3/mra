@@ -32,7 +32,7 @@ pub struct ProgressState {
     pub busy: bool,
 }
 
-/// Returned by [`AgentHandle::spawn`]. Bundles everything needed to
+/// Returned by [`AgentSpawn::spawn`]. Bundles everything needed to
 /// interact with and monitor a running agent.
 pub struct SpawnedAgent {
     /// Cloneable handle for sending tasks and shutdown signals.
@@ -137,6 +137,14 @@ impl AgentHandle {
     /// Creates a bounded `mpsc` channel (capacity from `config.mailbox_size`),
     /// a `watch` channel for [`ProgressState`], and spawns the internal
     /// runner loop. The runner is generic over `B` — no dynamic dispatch.
+    ///
+    /// # Deprecated
+    ///
+    /// Use [`AgentSpawn::new`](crate::agent::AgentSpawn::new) instead:
+    /// ```ignore
+    /// AgentSpawn::new("name", behavior).llm(llm).spawn()
+    /// ```
+    #[deprecated(note = "Use AgentSpawn::new(name, behavior).spawn() instead")]
     #[allow(clippy::too_many_arguments)]
     pub fn spawn<B: AgentBehavior>(
         id: AgentId,
@@ -187,6 +195,14 @@ impl AgentHandle {
     ///
     /// Returns a [`SpawnedChild`] whose future the supervisor will spawn
     /// via its own `JoinSet`, giving it full control over task lifecycle.
+    ///
+    /// # Deprecated
+    ///
+    /// Use [`AgentSpawn::from_config`](crate::agent::AgentSpawn::from_config) instead:
+    /// ```ignore
+    /// AgentSpawn::from_config(config, behavior).spawn_child()
+    /// ```
+    #[deprecated(note = "Use AgentSpawn::from_config(config, behavior).spawn_child() instead")]
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_child<B: AgentBehavior>(
         id: AgentId,
