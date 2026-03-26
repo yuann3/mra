@@ -1,4 +1,4 @@
 /target
 /docs/plans/
 mra.toml
-*.org
+/04-tokio-multi-agent-swarm.org
