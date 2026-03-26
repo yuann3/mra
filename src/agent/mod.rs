@@ -8,15 +8,20 @@
 //! - An internal runner (not public) that owns mutable state, receives
 //!   messages, and calls [`AgentBehavior::handle`].
 //!
-//! Use [`AgentHandle::spawn`] to create both halves and get back a
+//! Use [`AgentSpawn`] to create both halves and get back a
 //! [`SpawnedAgent`] containing the handle, a progress watcher, and the
 //! task's `JoinHandle`.
+//!
+//! ```ignore
+//! let spawned = AgentSpawn::new("my-agent", MyBehavior).spawn();
+//! ```
 
 mod ctx;
 mod handle;
 pub(crate) mod mailbox;
 mod message;
 mod runner;
+mod spawn;
 
 use crate::error::AgentError;
 
@@ -25,6 +30,7 @@ pub use handle::AgentHandle;
 pub(crate) use message::AgentMessage;
 pub use message::{AgentReply, Task};
 pub use runner::{ProgressState, SpawnedAgent};
+pub use spawn::AgentSpawn;
 
 /// Defines how an agent processes incoming [`Task`]s.
 ///

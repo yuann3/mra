@@ -1,11 +1,9 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use mra::agent::{AgentBehavior, AgentCtx, AgentHandle, AgentReply, Task};
+use mra::agent::{AgentBehavior, AgentCtx, AgentReply, AgentSpawn, Task};
 use mra::config::AgentConfig;
 use mra::error::AgentError;
-use mra::ids::AgentId;
-use mra::tool::ToolRegistry;
 use tokio_util::sync::CancellationToken;
 
 /// A simple behavior that echoes the instruction back as output.
@@ -41,19 +39,9 @@ impl AgentBehavior for SlowBehavior {
 
 #[tokio::test]
 async fn test_agent_execute() {
-    let config = AgentConfig::new("echo");
     let cancel = CancellationToken::new();
 
-    let spawned = AgentHandle::spawn(
-        AgentId::new(),
-        config,
-        EchoBehavior,
-        HashMap::new(),
-        None,
-        cancel,
-        None,
-        ToolRegistry::new(),
-    );
+    let spawned = AgentSpawn::new("echo", EchoBehavior).cancel(cancel).spawn();
 
     let task = Task::new("hello world");
     let reply = spawned.handle.execute(task).await.unwrap();
@@ -65,19 +53,9 @@ async fn test_agent_execute() {
 
 #[tokio::test]
 async fn test_agent_shutdown() {
-    let config = AgentConfig::new("echo");
     let cancel = CancellationToken::new();
 
-    let spawned = AgentHandle::spawn(
-        AgentId::new(),
-        config,
-        EchoBehavior,
-        HashMap::new(),
-        None,
-        cancel,
-        None,
-        ToolRegistry::new(),
-    );
+    let spawned = AgentSpawn::new("echo", EchoBehavior).cancel(cancel).spawn();
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     spawned.handle.shutdown(deadline).await;
@@ -89,19 +67,9 @@ async fn test_agent_shutdown() {
 
 #[tokio::test]
 async fn test_agent_cancel() {
-    let config = AgentConfig::new("echo");
     let cancel = CancellationToken::new();
 
-    let spawned = AgentHandle::spawn(
-        AgentId::new(),
-        config,
-        EchoBehavior,
-        HashMap::new(),
-        None,
-        cancel,
-        None,
-        ToolRegistry::new(),
-    );
+    let spawned = AgentSpawn::new("echo", EchoBehavior).cancel(cancel).spawn();
 
     spawned.handle.cancel();
 
@@ -111,21 +79,16 @@ async fn test_agent_cancel() {
 
 #[tokio::test]
 async fn test_agent_backpressure() {
-    let config = AgentConfig::new("slow").with_mailbox_size(1);
     let cancel = CancellationToken::new();
 
-    let spawned = AgentHandle::spawn(
-        AgentId::new(),
-        config,
+    let spawned = AgentSpawn::from_config(
+        AgentConfig::new("slow").with_mailbox_size(1),
         SlowBehavior {
             delay: Duration::from_millis(100),
         },
-        HashMap::new(),
-        None,
-        cancel,
-        None,
-        ToolRegistry::new(),
-    );
+    )
+    .cancel(cancel)
+    .spawn();
 
     let handle1 = spawned.handle.clone();
     let handle2 = spawned.handle.clone();
@@ -156,21 +119,16 @@ async fn test_agent_backpressure() {
 
 #[tokio::test]
 async fn test_agent_progress_updates() {
-    let config = AgentConfig::new("slow");
     let cancel = CancellationToken::new();
 
-    let spawned = AgentHandle::spawn(
-        AgentId::new(),
-        config,
+    let spawned = AgentSpawn::new(
+        "slow",
         SlowBehavior {
             delay: Duration::from_millis(50),
         },
-        HashMap::new(),
-        None,
-        cancel,
-        None,
-        ToolRegistry::new(),
-    );
+    )
+    .cancel(cancel)
+    .spawn();
 
     // Initially not busy
     let state = *spawned.progress.borrow();
@@ -193,19 +151,9 @@ async fn test_agent_progress_updates() {
 
 #[tokio::test]
 async fn test_agent_execute_after_channel_closed() {
-    let config = AgentConfig::new("echo");
     let cancel = CancellationToken::new();
 
-    let spawned = AgentHandle::spawn(
-        AgentId::new(),
-        config,
-        EchoBehavior,
-        HashMap::new(),
-        None,
-        cancel,
-        None,
-        ToolRegistry::new(),
-    );
+    let spawned = AgentSpawn::new("echo", EchoBehavior).cancel(cancel).spawn();
 
     // Cancel the agent so it stops
     spawned.handle.cancel();
@@ -253,29 +201,16 @@ async fn test_agent_delegates_to_peer() {
 
     let cancel = CancellationToken::new();
 
-    let echo = AgentHandle::spawn(
-        AgentId::new(),
-        AgentConfig::new("echo"),
-        EchoBehavior,
-        HashMap::new(),
-        None,
-        cancel.clone(),
-        None,
-        ToolRegistry::new(),
-    );
+    let echo = AgentSpawn::new("echo", EchoBehavior)
+        .cancel(cancel.clone())
+        .spawn();
 
     let mut peers = HashMap::new();
     peers.insert("echo".into(), echo.handle.clone());
-    let delegator = AgentHandle::spawn(
-        AgentId::new(),
-        AgentConfig::new("delegator"),
-        DelegateBehavior,
-        peers,
-        None,
-        cancel.clone(),
-        None,
-        ToolRegistry::new(),
-    );
+    let delegator = AgentSpawn::new("delegator", DelegateBehavior)
+        .peers(peers)
+        .cancel(cancel.clone())
+        .spawn();
 
     let reply = delegator.handle.execute(Task::new("hello")).await.unwrap();
     assert_eq!(reply.output, "via-delegate: delegated: hello");
@@ -306,18 +241,10 @@ async fn test_agent_report_progress() {
         }
     }
 
-    let config = AgentConfig::new("progress");
     let cancel = CancellationToken::new();
-    let spawned = AgentHandle::spawn(
-        AgentId::new(),
-        config,
-        ProgressBehavior,
-        HashMap::new(),
-        None,
-        cancel,
-        None,
-        ToolRegistry::new(),
-    );
+    let spawned = AgentSpawn::new("progress", ProgressBehavior)
+        .cancel(cancel)
+        .spawn();
 
     let handle = spawned.handle.clone();
     let task_handle = tokio::spawn(async move { handle.execute(Task::new("work")).await });

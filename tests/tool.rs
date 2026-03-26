@@ -374,13 +374,7 @@ async fn edit_file_tool_unicode_content() {
 
 // --- AgentCtx + spawn path integration ---
 
-use std::collections::HashMap;
-
-use tokio_util::sync::CancellationToken;
-
-use mra::agent::{AgentBehavior, AgentCtx, AgentHandle, AgentReply, Task};
-use mra::config::AgentConfig;
-use mra::ids::AgentId;
+use mra::agent::{AgentBehavior, AgentCtx, AgentReply, AgentSpawn, Task};
 
 struct ToolUsingBehavior;
 
@@ -403,16 +397,9 @@ async fn agent_ctx_call_tool_works() {
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(EchoTool::new())).unwrap();
 
-    let spawned = AgentHandle::spawn(
-        AgentId::new(),
-        AgentConfig::new("test"),
-        ToolUsingBehavior,
-        HashMap::new(),
-        None,
-        CancellationToken::new(),
-        None,
-        registry,
-    );
+    let spawned = AgentSpawn::new("test", ToolUsingBehavior)
+        .tools(registry)
+        .spawn();
 
     let reply = spawned
         .handle
@@ -508,16 +495,10 @@ impl AgentBehavior for ChatWithToolsBehavior {
 }
 
 fn spawn_tool_agent(llm: Arc<dyn LlmProvider>, registry: ToolRegistry) -> mra::agent::SpawnedAgent {
-    AgentHandle::spawn(
-        AgentId::new(),
-        AgentConfig::new("test"),
-        ChatWithToolsBehavior,
-        HashMap::new(),
-        Some(llm),
-        CancellationToken::new(),
-        None,
-        registry,
-    )
+    AgentSpawn::new("test", ChatWithToolsBehavior)
+        .llm(llm)
+        .tools(registry)
+        .spawn()
 }
 
 #[tokio::test]
@@ -678,16 +659,11 @@ async fn chat_with_tools_budget_exceeded_mid_loop() {
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(EchoTool::new())).unwrap();
 
-    let spawned = AgentHandle::spawn(
-        AgentId::new(),
-        AgentConfig::new("test"),
-        ChatWithToolsBehavior,
-        HashMap::new(),
-        Some(llm.clone()),
-        CancellationToken::new(),
-        Some(budget),
-        registry,
-    );
+    let spawned = AgentSpawn::new("test", ChatWithToolsBehavior)
+        .llm(llm.clone())
+        .budget(budget)
+        .tools(registry)
+        .spawn();
 
     let result = spawned.handle.execute(Task::new("test")).await;
     // First chat() charges 150 tokens against a 100 limit — trips budget.

@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mra::agent::{AgentBehavior, AgentCtx, AgentHandle, AgentReply, Task};
+use mra::agent::{AgentBehavior, AgentCtx, AgentReply, AgentSpawn, Task};
 use mra::config::AgentConfig;
 use mra::error::AgentError;
 use mra::supervisor::{
@@ -74,30 +74,7 @@ fn child_spec_with_defaults() {
         }
     }
 
-    let spec = ChildSpec::new(
-        "test",
-        AgentConfig::new("test"),
-        Arc::new(|ctx| {
-            Box::pin(async move {
-                Ok(AgentHandle::spawn_child(
-                    ctx.id,
-                    AgentConfig::new("test"),
-                    DummyBehavior,
-                    ctx.peers,
-                    ctx.llm,
-                    ctx.cancel,
-                    None,
-                    ctx.tools,
-                ))
-            })
-                as Pin<
-                    Box<
-                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
-                            + Send,
-                    >,
-                >
-        }),
-    );
+    let spec = ChildSpec::from_behavior(AgentConfig::new("test"), |_| DummyBehavior);
 
     assert_eq!(spec.name, "test");
     assert!(matches!(spec.restart, ChildRestart::Transient));
@@ -122,35 +99,12 @@ fn child_spec_builder_methods() {
         }
     }
 
-    let spec = ChildSpec::new(
-        "worker",
-        AgentConfig::new("worker"),
-        Arc::new(|ctx| {
-            Box::pin(async move {
-                Ok(AgentHandle::spawn_child(
-                    ctx.id,
-                    AgentConfig::new("worker"),
-                    DummyBehavior,
-                    ctx.peers,
-                    ctx.llm,
-                    ctx.cancel,
-                    None,
-                    ctx.tools,
-                ))
-            })
-                as Pin<
-                    Box<
-                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
-                            + Send,
-                    >,
-                >
-        }),
-    )
-    .with_restart(ChildRestart::Permanent)
-    .with_shutdown_policy(ShutdownPolicy {
-        grace: Duration::from_secs(10),
-    })
-    .with_hang_timeout(Duration::from_secs(30));
+    let spec = ChildSpec::from_behavior(AgentConfig::new("worker"), |_| DummyBehavior)
+        .with_restart(ChildRestart::Permanent)
+        .with_shutdown_policy(ShutdownPolicy {
+            grace: Duration::from_secs(10),
+        })
+        .with_hang_timeout(Duration::from_secs(30));
 
     assert_eq!(spec.name, "worker");
     assert!(matches!(spec.restart, ChildRestart::Permanent));
@@ -173,32 +127,7 @@ impl AgentBehavior for EchoBehavior {
 }
 
 fn echo_spec(name: &str) -> ChildSpec {
-    let agent_name = name.to_string();
-    ChildSpec::new(
-        name,
-        AgentConfig::new(name),
-        Arc::new(move |ctx: ChildContext| {
-            let agent_name = agent_name.clone();
-            Box::pin(async move {
-                Ok(AgentHandle::spawn_child(
-                    ctx.id,
-                    AgentConfig::new(&agent_name),
-                    EchoBehavior,
-                    ctx.peers,
-                    ctx.llm,
-                    ctx.cancel,
-                    None,
-                    ctx.tools,
-                ))
-            })
-                as Pin<
-                    Box<
-                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
-                            + Send,
-                    >,
-                >
-        }),
-    )
+    ChildSpec::from_behavior(AgentConfig::new(name), |_| EchoBehavior)
 }
 
 #[tokio::test]
@@ -287,16 +216,16 @@ async fn test_supervisor_restarts_crashed_transient_child() {
                         ChildExit::Failed("crash".into())
                     })))
                 } else {
-                    Ok(AgentHandle::spawn_child(
-                        ctx.id,
-                        AgentConfig::new("crasher"),
-                        EchoBehavior,
-                        ctx.peers,
-                        ctx.llm,
-                        ctx.cancel,
-                        None,
-                        ctx.tools,
-                    ))
+                    Ok(
+                        AgentSpawn::from_config(AgentConfig::new("crasher"), EchoBehavior)
+                            .id(ctx.id)
+                            .cancel(ctx.cancel)
+                            .peers(ctx.peers)
+                            .llm_opt(ctx.llm)
+                            .budget_opt(ctx.budget)
+                            .tools(ctx.tools)
+                            .spawn_child(),
+                    )
                 }
             })
                 as Pin<
@@ -434,32 +363,10 @@ async fn test_supervisor_one_for_all_restarts_all_children() {
     let b_count = Arc::new(AtomicU32::new(0));
 
     let a_c = a_count.clone();
-    let spec_a = ChildSpec::new(
-        "a",
-        AgentConfig::new("a"),
-        Arc::new(move |ctx: ChildContext| {
-            let a_c = a_c.clone();
-            Box::pin(async move {
-                a_c.fetch_add(1, Ordering::SeqCst);
-                Ok(AgentHandle::spawn_child(
-                    ctx.id,
-                    AgentConfig::new("a"),
-                    EchoBehavior,
-                    ctx.peers,
-                    ctx.llm,
-                    ctx.cancel,
-                    None,
-                    ctx.tools,
-                ))
-            })
-                as Pin<
-                    Box<
-                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
-                            + Send,
-                    >,
-                >
-        }),
-    );
+    let spec_a = ChildSpec::from_behavior(AgentConfig::new("a"), move |_| {
+        a_c.fetch_add(1, Ordering::SeqCst);
+        EchoBehavior
+    });
 
     let b_c = b_count.clone();
     let spec_b = ChildSpec::new(
@@ -475,16 +382,14 @@ async fn test_supervisor_one_for_all_restarts_all_children() {
                         ChildExit::Failed("crash".into())
                     })))
                 } else {
-                    Ok(AgentHandle::spawn_child(
-                        ctx.id,
-                        AgentConfig::new("b"),
-                        EchoBehavior,
-                        ctx.peers,
-                        ctx.llm,
-                        ctx.cancel,
-                        None,
-                        ctx.tools,
-                    ))
+                    Ok(AgentSpawn::from_config(AgentConfig::new("b"), EchoBehavior)
+                        .id(ctx.id)
+                        .cancel(ctx.cancel)
+                        .peers(ctx.peers)
+                        .llm_opt(ctx.llm)
+                        .budget_opt(ctx.budget)
+                        .tools(ctx.tools)
+                        .spawn_child())
                 }
             })
                 as Pin<
@@ -557,16 +462,16 @@ async fn test_supervisor_detects_hung_agent() {
         AgentConfig::new("hanger"),
         Arc::new(move |ctx: ChildContext| {
             Box::pin(async move {
-                Ok(AgentHandle::spawn_child(
-                    ctx.id,
-                    AgentConfig::new("hanger"),
-                    HangBehavior,
-                    ctx.peers,
-                    ctx.llm,
-                    ctx.cancel,
-                    None,
-                    ctx.tools,
-                ))
+                Ok(
+                    AgentSpawn::from_config(AgentConfig::new("hanger"), HangBehavior)
+                        .id(ctx.id)
+                        .cancel(ctx.cancel)
+                        .peers(ctx.peers)
+                        .llm_opt(ctx.llm)
+                        .budget_opt(ctx.budget)
+                        .tools(ctx.tools)
+                        .spawn_child(),
+                )
             })
                 as Pin<
                     Box<

@@ -2,7 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use mra::agent::{AgentBehavior, AgentCtx, AgentHandle, AgentReply, Task};
+use mra::agent::{AgentBehavior, AgentCtx, AgentReply, AgentSpawn, Task};
 use mra::config::AgentConfig;
 use mra::error::AgentError;
 use mra::llm::{ChatMessage, LlmProvider, LlmRequest, LlmResponse, Role};
@@ -65,16 +65,16 @@ fn test_spec(name: &str, llm: Arc<dyn LlmProvider>) -> ChildSpec {
             let llm = llm.clone();
             let name = agent_name.clone();
             Box::pin(async move {
-                Ok(AgentHandle::spawn_child(
-                    ctx.id,
-                    AgentConfig::new(&name),
-                    SimpleBehavior,
-                    ctx.peers,
-                    Some(llm),
-                    ctx.cancel,
-                    ctx.budget,
-                    ctx.tools,
-                ))
+                Ok(
+                    AgentSpawn::from_config(AgentConfig::new(&name), SimpleBehavior)
+                        .id(ctx.id)
+                        .llm(llm)
+                        .cancel(ctx.cancel)
+                        .peers(ctx.peers)
+                        .tools(ctx.tools)
+                        .budget_opt(ctx.budget)
+                        .spawn_child(),
+                )
             })
                 as Pin<
                     Box<
