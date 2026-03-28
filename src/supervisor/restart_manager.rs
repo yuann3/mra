@@ -37,7 +37,6 @@ pub enum RestartDecision {
 
 struct ChildRestartState {
     policy: ChildRestart,
-    restart_policy: RestartPolicy,
     tracker: RestartTracker,
 }
 
@@ -69,15 +68,9 @@ impl RestartManager {
             name.to_owned(),
             ChildRestartState {
                 policy: restart,
-                restart_policy: restart_policy.clone(),
                 tracker: RestartTracker::new(restart_policy),
             },
         );
-    }
-
-    /// Removes a child from tracking (on explicit stop or permanent removal).
-    pub(crate) fn unregister(&mut self, name: &str) {
-        self.children.remove(name);
     }
 
     /// The main entry point: "This child exited — what should I do?"
@@ -141,12 +134,21 @@ impl RestartManager {
 
     /// For OneForAll: records restart for all children except Temporary.
     /// Call AFTER canceling all children, BEFORE respawning.
-    pub(crate) fn record_all(&mut self, now: Instant) {
+    /// Returns true if restart should proceed, false if intensity exceeded.
+    pub(crate) fn record_all(&mut self, now: Instant) -> bool {
         for child in self.children.values_mut() {
             if !matches!(child.policy, ChildRestart::Temporary) {
                 child.tracker.record(now);
             }
         }
+        // Record one global restart for the OneForAll cascade
+        self.intensity.record(now);
+        !self.intensity.exceeded()
+    }
+
+    /// Returns the total restarts tracked by the intensity tracker.
+    pub(crate) fn intensity_total_restarts(&self) -> u64 {
+        self.intensity.total_restarts
     }
 
     /// Returns current backoff delay for a child (useful for diagnostics).
@@ -155,14 +157,6 @@ impl RestartManager {
             .get(name)
             .map(|c| c.tracker.backoff_delay())
             .unwrap_or_default()
-    }
-
-    /// Returns the total restarts for a child (for event emission).
-    pub(crate) fn child_total_restarts(&self, name: &str) -> u64 {
-        self.children
-            .get(name)
-            .map(|c| c.tracker.total_restarts)
-            .unwrap_or(0)
     }
 }
 
@@ -344,5 +338,64 @@ mod tests {
         } else {
             panic!("expected RestartAfter");
         }
+    }
+
+    #[test]
+    fn record_all_tracks_intensity_and_returns_false_when_exceeded() {
+        // Supervisor-wide intensity: max 2 restarts in 60s
+        let config = SupervisorConfig {
+            strategy: Strategy::OneForAll,
+            intensity: RestartIntensity {
+                max_restarts: 2,
+                window: Duration::from_secs(60),
+            },
+            hang_check_interval: Duration::from_secs(1),
+            event_capacity: 64,
+        };
+        let mut mgr = RestartManager::new(&config);
+        let policy = test_restart_policy();
+
+        mgr.register("a", ChildRestart::Permanent, &policy);
+        mgr.register("b", ChildRestart::Permanent, &policy);
+        mgr.register("temp", ChildRestart::Temporary, &policy);
+
+        let now = Instant::now();
+
+        // First cascade — should succeed
+        assert!(mgr.record_all(now));
+        assert_eq!(mgr.intensity_total_restarts(), 1);
+
+        // Second cascade — should succeed
+        assert!(mgr.record_all(now + Duration::from_millis(1)));
+        assert_eq!(mgr.intensity_total_restarts(), 2);
+
+        // Third cascade — should fail (exceeded)
+        assert!(!mgr.record_all(now + Duration::from_millis(2)));
+        assert_eq!(mgr.intensity_total_restarts(), 3);
+    }
+
+    #[test]
+    fn record_all_does_not_count_temporary_children() {
+        let config = test_config(Strategy::OneForAll);
+        let mut mgr = RestartManager::new(&config);
+        let policy = test_restart_policy();
+
+        mgr.register("perm", ChildRestart::Permanent, &policy);
+        mgr.register("temp", ChildRestart::Temporary, &policy);
+
+        let now = Instant::now();
+        let base_delay = mgr.backoff_delay("perm"); // base delay before any restarts
+
+        // Two restarts to see backoff increase (first restart = 2^0 = base, second = 2^1 = 2*base)
+        mgr.record_all(now);
+        mgr.record_all(now + Duration::from_millis(1));
+
+        // Permanent child's tracker was updated — backoff doubled (2 restarts = 2^1 * base)
+        let delay_perm = mgr.backoff_delay("perm");
+        assert_eq!(delay_perm, base_delay * 2, "Permanent child backoff should double");
+
+        // Temporary child's tracker was NOT updated — backoff stays at base
+        let delay_temp = mgr.backoff_delay("temp");
+        assert_eq!(delay_temp, base_delay, "Temporary child backoff should not change");
     }
 }

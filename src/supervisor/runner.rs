@@ -346,7 +346,13 @@ impl SupervisorRunner {
 
         // 3. Record restart in RestartManager for all non-Temporary children
         let now = tokio::time::Instant::now();
-        self.restart_mgr.record_all(now);
+        if !self.restart_mgr.record_all(now) {
+            // Intensity exceeded — emit event, drain, and fail
+            let total_restarts = self.restart_mgr.intensity_total_restarts();
+            self.emit(SupervisorEvent::RestartIntensityExceeded { total_restarts });
+            self.drain_all().await;
+            return Err(SupervisorError::RestartIntensityExceeded { total_restarts });
+        }
 
         // 4. Respawn all non-Temporary children in insertion order
         let order = self.child_order.clone();
