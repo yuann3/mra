@@ -85,6 +85,17 @@ impl SupervisorRunner {
         self.emit(SupervisorEvent::SupervisorStarted);
 
         loop {
+            // Calculate sleep duration for pending restarts
+            let next_restart = self.next_pending_restart();
+            let restart_sleep = async {
+                if let Some(when) = next_restart {
+                    tokio::time::sleep_until(when).await;
+                } else {
+                    // Sleep forever (will be cancelled by other branches)
+                    std::future::pending::<()>().await;
+                }
+            };
+
             tokio::select! {
                 _ = self.cancel.cancelled() => {
                     self.drain_all().await;
@@ -105,6 +116,15 @@ impl SupervisorRunner {
 
                 _ = hang_tick.tick() => {
                     self.check_hangs().await;
+                }
+
+                _ = restart_sleep, if !self.pending_restarts.is_empty() => {
+                    let now = tokio::time::Instant::now();
+                    while let Some(restart) = self.pop_ready_restart(now) {
+                        if !self.cancel.is_cancelled() {
+                            self.do_restart_child(&restart.name, restart.old_gen).await?;
+                        }
+                    }
                 }
             }
         }
@@ -415,6 +435,87 @@ impl SupervisorRunner {
             }
         }
         while self.join_set.join_next().await.is_some() {}
+    }
+
+    fn next_pending_restart(&self) -> Option<tokio::time::Instant> {
+        self.pending_restarts.iter().map(|r| r.when).min()
+    }
+
+    fn pop_ready_restart(&mut self, now: tokio::time::Instant) -> Option<PendingRestart> {
+        if let Some(idx) = self.pending_restarts.iter().position(|r| r.when <= now) {
+            Some(self.pending_restarts.swap_remove(idx))
+        } else {
+            None
+        }
+    }
+
+    async fn do_restart_child(&mut self, name: &str, old_gen: u64) -> Result<(), SupervisorError> {
+        // Check child still exists and is dead with matching generation
+        let Some(child) = self.children.get(name) else {
+            return Ok(());
+        };
+        if child.alive || child.generation != old_gen {
+            return Ok(()); // Already restarted or generation mismatch
+        }
+
+        // Build peers map from alive siblings
+        let peers: HashMap<String, AgentHandle> = self
+            .children
+            .iter()
+            .filter(|(n, c)| c.alive && *n != name)
+            .map(|(n, c)| {
+                (
+                    n.clone(),
+                    AgentHandle::new(c.id, c.mailbox.clone(), c.logical_cancel.clone()),
+                )
+            })
+            .collect();
+
+        let child = self.children.get_mut(name).unwrap();
+        let new_gen = old_gen + 1;
+        let child_cancel = child.logical_cancel.child_token();
+
+        let ctx = ChildContext {
+            id: child.id,
+            generation: new_gen,
+            cancel: child_cancel.clone(),
+            peers,
+            llm: None,
+            budget: self.budget.clone(),
+            tools: ToolRegistry::new(),
+        };
+
+        let spawned = match (child.spec.factory)(ctx).await {
+            Ok(s) => s,
+            Err(_) => {
+                // Factory failed — leave child dead
+                return Ok(());
+            }
+        };
+
+        // Hot-swap sender into stable mailbox
+        child.mailbox.swap(spawned.sender);
+
+        // Spawn new future in JoinSet
+        let abort = self.join_set.spawn(spawned.future);
+        let new_task_id = abort.id();
+        self.task_map.insert(new_task_id, name.to_string());
+
+        // Update child state
+        child.generation = new_gen;
+        child.progress = Some(spawned.progress);
+        child.child_cancel = Some(child_cancel);
+        child.alive = true;
+
+        let delay = self.restart_mgr.backoff_delay(name);
+        self.emit(SupervisorEvent::ChildRestarted {
+            name: name.to_string(),
+            old_gen,
+            new_gen,
+            delay,
+        });
+
+        Ok(())
     }
 
     async fn check_hangs(&mut self) {
