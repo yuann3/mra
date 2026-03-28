@@ -67,4 +67,63 @@ impl RestartManager {
     pub(crate) fn unregister(&mut self, name: &str) {
         self.children.remove(name);
     }
+
+    /// The main entry point: "This child exited — what should I do?"
+    ///
+    /// Synchronously decides whether to restart, checking:
+    /// - Restart policy (Permanent/Transient/Temporary)
+    /// - Per-child restart limits
+    /// - Supervisor-wide intensity limits
+    /// - OneForOne vs OneForAll strategy
+    ///
+    /// Returns a decision with computed backoff delay (if applicable).
+    /// **Does NOT sleep** — supervisor must schedule the delay.
+    pub(crate) fn decide(
+        &mut self,
+        name: &str,
+        exit: &ChildExit,
+        hung: bool,
+        now: Instant,
+    ) -> RestartDecision {
+        let Some(child) = self.children.get_mut(name) else {
+            return RestartDecision::NoRestart;
+        };
+
+        // Hung children are treated as failures regardless of exit type
+        let is_failure = hung || exit.is_failure();
+
+        // 1. Evaluate restart policy
+        if !child.policy.should_restart(is_failure) {
+            return RestartDecision::NoRestart;
+        }
+
+        // 2. Record restart timestamp in per-child tracker
+        child.tracker.record(now);
+
+        // 3. Check per-child limit
+        if child.tracker.exceeded() {
+            return RestartDecision::ChildLimitExceeded {
+                restarts: child.tracker.total_restarts,
+            };
+        }
+
+        // 4. Record in global intensity tracker
+        self.intensity.record(now);
+
+        // 5. Check supervisor-wide intensity
+        if self.intensity.exceeded() {
+            return RestartDecision::IntensityExceeded {
+                total_restarts: self.intensity.total_restarts,
+            };
+        }
+
+        // 6. Apply strategy
+        match self.strategy {
+            Strategy::OneForOne => {
+                let delay = child.tracker.backoff_delay();
+                RestartDecision::RestartAfter { delay }
+            }
+            Strategy::OneForAll => RestartDecision::RestartAll,
+        }
+    }
 }
