@@ -50,4 +50,21 @@ impl RestartManager {
             intensity: IntensityTracker::new(config.intensity.clone()),
         }
     }
+
+    /// Registers a child for restart tracking. Call once on initial start.
+    pub(crate) fn register(&mut self, name: &str, restart: ChildRestart, restart_policy: &RestartPolicy) {
+        self.children.insert(
+            name.to_owned(),
+            ChildRestartState {
+                policy: restart,
+                restart_policy: restart_policy.clone(),
+                tracker: RestartTracker::new(restart_policy),
+            },
+        );
+    }
+
+    /// Removes a child from tracking (on explicit stop or permanent removal).
+    pub(crate) fn unregister(&mut self, name: &str) {
+        self.children.remove(name);
+    }
 }
