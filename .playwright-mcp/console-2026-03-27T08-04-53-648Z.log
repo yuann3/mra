@@ -1,0 +1,3 @@
+[     407ms] [WARNING] [vike][Warning] pageContext.urlPathname is already available in the browser when using Client Routing; adding 'urlPathname' to passToClient has no effect @ https://build.classdo.com/assets/chunks/chunk-CKCd6q5J.js:2
+[     510ms] [ERROR] Failed to load resource: the server responded with a status of 401 () @ https://artsammiddleware-production.up.railway.app/api/v1/curriculum?page=1&limit=20:0
+[     543ms] [WARNING] [vike][Warning] pageContext.urlPathname is already available in the browser when using Client Routing; adding 'urlPathname' to passToClient has no effect @ https://build.classdo.com/assets/chunks/chunk-CKCd6q5J.js:2
