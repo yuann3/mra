@@ -335,10 +335,8 @@ impl SupervisorRunner {
     async fn restart_all(&mut self, trigger_name: &str) -> Result<(), SupervisorError> {
         // 1. Cancel all alive children (except the one that already exited)
         for (name, child) in &self.children {
-            if name != trigger_name {
-                if let Some(ref cancel) = child.child_cancel {
-                    cancel.cancel();
-                }
+            if name != trigger_name && let Some(ref cancel) = child.child_cancel {
+                cancel.cancel();
             }
         }
 
