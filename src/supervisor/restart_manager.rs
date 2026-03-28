@@ -126,4 +126,30 @@ impl RestartManager {
             Strategy::OneForAll => RestartDecision::RestartAll,
         }
     }
+
+    /// For OneForAll: records restart for all children except Temporary.
+    /// Call AFTER canceling all children, BEFORE respawning.
+    pub(crate) fn record_all(&mut self, now: Instant) {
+        for child in self.children.values_mut() {
+            if !matches!(child.policy, ChildRestart::Temporary) {
+                child.tracker.record(now);
+            }
+        }
+    }
+
+    /// Returns current backoff delay for a child (useful for diagnostics).
+    pub(crate) fn backoff_delay(&self, name: &str) -> Duration {
+        self.children
+            .get(name)
+            .map(|c| c.tracker.backoff_delay())
+            .unwrap_or_default()
+    }
+
+    /// Returns the total restarts for a child (for event emission).
+    pub(crate) fn child_total_restarts(&self, name: &str) -> u64 {
+        self.children
+            .get(name)
+            .map(|c| c.tracker.total_restarts)
+            .unwrap_or(0)
+    }
 }
