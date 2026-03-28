@@ -153,3 +153,184 @@ impl RestartManager {
             .unwrap_or(0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::supervisor::config::RestartIntensity;
+
+    fn test_config(strategy: Strategy) -> SupervisorConfig {
+        SupervisorConfig {
+            strategy,
+            intensity: RestartIntensity {
+                max_restarts: 3,
+                window: Duration::from_secs(60),
+            },
+            hang_check_interval: Duration::from_secs(1),
+            event_capacity: 64,
+        }
+    }
+
+    fn test_restart_policy() -> RestartPolicy {
+        RestartPolicy {
+            max_restarts: 2,
+            window: Duration::from_secs(60),
+            backoff_base: Duration::from_millis(100),
+            backoff_max: Duration::from_secs(1),
+        }
+    }
+
+    #[test]
+    fn decide_no_restart_for_temporary() {
+        let config = test_config(Strategy::OneForOne);
+        let mut mgr = RestartManager::new(&config);
+        mgr.register("temp", ChildRestart::Temporary, &test_restart_policy());
+
+        let decision = mgr.decide("temp", &ChildExit::Failed("err".into()), false, Instant::now());
+        assert!(matches!(decision, RestartDecision::NoRestart));
+    }
+
+    #[test]
+    fn decide_no_restart_for_transient_normal_exit() {
+        let config = test_config(Strategy::OneForOne);
+        let mut mgr = RestartManager::new(&config);
+        mgr.register("trans", ChildRestart::Transient, &test_restart_policy());
+
+        let decision = mgr.decide("trans", &ChildExit::Normal, false, Instant::now());
+        assert!(matches!(decision, RestartDecision::NoRestart));
+    }
+
+    #[test]
+    fn decide_restart_for_transient_failure() {
+        let config = test_config(Strategy::OneForOne);
+        let mut mgr = RestartManager::new(&config);
+        mgr.register("trans", ChildRestart::Transient, &test_restart_policy());
+
+        let decision = mgr.decide("trans", &ChildExit::Failed("err".into()), false, Instant::now());
+        assert!(matches!(decision, RestartDecision::RestartAfter { .. }));
+    }
+
+    #[test]
+    fn decide_restart_for_permanent_normal_exit() {
+        let config = test_config(Strategy::OneForOne);
+        let mut mgr = RestartManager::new(&config);
+        mgr.register("perm", ChildRestart::Permanent, &test_restart_policy());
+
+        let decision = mgr.decide("perm", &ChildExit::Normal, false, Instant::now());
+        assert!(matches!(decision, RestartDecision::RestartAfter { .. }));
+    }
+
+    #[test]
+    fn decide_hung_child_treated_as_failure() {
+        let config = test_config(Strategy::OneForOne);
+        let mut mgr = RestartManager::new(&config);
+        mgr.register("trans", ChildRestart::Transient, &test_restart_policy());
+
+        // Shutdown exit is normally not a failure, but hung=true overrides
+        let decision = mgr.decide("trans", &ChildExit::Shutdown, true, Instant::now());
+        assert!(matches!(decision, RestartDecision::RestartAfter { .. }));
+    }
+
+    #[test]
+    fn decide_child_limit_exceeded() {
+        let config = test_config(Strategy::OneForOne);
+        let mut mgr = RestartManager::new(&config);
+        let policy = RestartPolicy {
+            max_restarts: 1,
+            window: Duration::from_secs(60),
+            backoff_base: Duration::from_millis(10),
+            backoff_max: Duration::from_millis(100),
+        };
+        mgr.register("child", ChildRestart::Permanent, &policy);
+
+        let now = Instant::now();
+        // First restart
+        let d1 = mgr.decide("child", &ChildExit::Failed("".into()), false, now);
+        assert!(matches!(d1, RestartDecision::RestartAfter { .. }));
+
+        // Second restart - should exceed
+        let d2 = mgr.decide("child", &ChildExit::Failed("".into()), false, now + Duration::from_millis(1));
+        assert!(matches!(d2, RestartDecision::ChildLimitExceeded { .. }));
+    }
+
+    #[test]
+    fn decide_intensity_exceeded() {
+        let config = SupervisorConfig {
+            strategy: Strategy::OneForOne,
+            intensity: RestartIntensity {
+                max_restarts: 1,
+                window: Duration::from_secs(60),
+            },
+            hang_check_interval: Duration::from_secs(1),
+            event_capacity: 64,
+        };
+        let mut mgr = RestartManager::new(&config);
+        let policy = RestartPolicy {
+            max_restarts: 10,
+            window: Duration::from_secs(60),
+            backoff_base: Duration::from_millis(10),
+            backoff_max: Duration::from_millis(100),
+        };
+        mgr.register("a", ChildRestart::Permanent, &policy);
+        mgr.register("b", ChildRestart::Permanent, &policy);
+
+        let now = Instant::now();
+        let d1 = mgr.decide("a", &ChildExit::Failed("".into()), false, now);
+        assert!(matches!(d1, RestartDecision::RestartAfter { .. }));
+
+        let d2 = mgr.decide("b", &ChildExit::Failed("".into()), false, now + Duration::from_millis(1));
+        assert!(matches!(d2, RestartDecision::IntensityExceeded { .. }));
+    }
+
+    #[test]
+    fn decide_one_for_all_returns_restart_all() {
+        let config = test_config(Strategy::OneForAll);
+        let mut mgr = RestartManager::new(&config);
+        mgr.register("child", ChildRestart::Permanent, &test_restart_policy());
+
+        let decision = mgr.decide("child", &ChildExit::Failed("".into()), false, Instant::now());
+        assert!(matches!(decision, RestartDecision::RestartAll));
+    }
+
+    #[test]
+    fn decide_unknown_child_returns_no_restart() {
+        let config = test_config(Strategy::OneForOne);
+        let mut mgr = RestartManager::new(&config);
+
+        let decision = mgr.decide("unknown", &ChildExit::Failed("".into()), false, Instant::now());
+        assert!(matches!(decision, RestartDecision::NoRestart));
+    }
+
+    #[test]
+    fn backoff_delay_increases_exponentially() {
+        let config = test_config(Strategy::OneForOne);
+        let mut mgr = RestartManager::new(&config);
+        let policy = RestartPolicy {
+            max_restarts: 10,
+            window: Duration::from_secs(60),
+            backoff_base: Duration::from_millis(100),
+            backoff_max: Duration::from_secs(10),
+        };
+        mgr.register("child", ChildRestart::Permanent, &policy);
+
+        let now = Instant::now();
+
+        if let RestartDecision::RestartAfter { delay } = mgr.decide("child", &ChildExit::Failed("".into()), false, now) {
+            assert_eq!(delay, Duration::from_millis(100));
+        } else {
+            panic!("expected RestartAfter");
+        }
+
+        if let RestartDecision::RestartAfter { delay } = mgr.decide("child", &ChildExit::Failed("".into()), false, now + Duration::from_millis(1)) {
+            assert_eq!(delay, Duration::from_millis(200));
+        } else {
+            panic!("expected RestartAfter");
+        }
+
+        if let RestartDecision::RestartAfter { delay } = mgr.decide("child", &ChildExit::Failed("".into()), false, now + Duration::from_millis(2)) {
+            assert_eq!(delay, Duration::from_millis(400));
+        } else {
+            panic!("expected RestartAfter");
+        }
+    }
+}
