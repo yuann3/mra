@@ -316,10 +316,10 @@ impl SupervisorRunner {
     async fn restart_all(&mut self, trigger_name: &str) -> Result<(), SupervisorError> {
         // 1. Cancel all alive children (except the one that already exited)
         for (name, child) in &self.children {
-            if name != trigger_name
-                && let Some(ref cancel) = child.child_cancel
-            {
-                cancel.cancel();
+            if name != trigger_name {
+                if let Some(ref cancel) = child.child_cancel {
+                    cancel.cancel();
+                }
             }
         }
 
@@ -327,21 +327,9 @@ impl SupervisorRunner {
         while self.join_set.join_next().await.is_some() {}
         self.task_map.clear();
 
-        // 3. Record restart in per-supervisor intensity tracker
+        // 3. Record restart in RestartManager for all non-Temporary children
         let now = tokio::time::Instant::now();
-        self.intensity.record(now);
-        if self.intensity.exceeded() {
-            let total = self.intensity.total_restarts;
-            let _ = self
-                .event_tx
-                .send(SupervisorEvent::RestartIntensityExceeded {
-                    total_restarts: total,
-                });
-            self.drain_all().await;
-            return Err(SupervisorError::RestartIntensityExceeded {
-                total_restarts: total,
-            });
-        }
+        self.restart_mgr.record_all(now);
 
         // 4. Respawn all non-Temporary children in insertion order
         let order = self.child_order.clone();
@@ -407,9 +395,8 @@ impl SupervisorRunner {
             child.progress = Some(spawned.progress);
             child.child_cancel = Some(child_cancel);
             child.alive = true;
-            child.tracker.record(now);
 
-            let _ = self.event_tx.send(SupervisorEvent::ChildRestarted {
+            self.emit(SupervisorEvent::ChildRestarted {
                 name: child_name.clone(),
                 old_gen,
                 new_gen,
