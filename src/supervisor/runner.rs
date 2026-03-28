@@ -16,11 +16,10 @@ use crate::tool::ToolRegistry;
 
 use super::ChildExit;
 use super::child::{ChildContext, ChildSpec};
-use super::config::{ChildRestart, Strategy, SupervisorConfig};
+use super::config::{ChildRestart, SupervisorConfig};
 use super::event::SupervisorEvent;
 use super::handle::SupervisorCommand;
 use super::restart_manager::{RestartDecision, RestartManager};
-use super::tracker::{IntensityTracker, RestartTracker};
 
 struct ChildState {
     spec: ChildSpec,
