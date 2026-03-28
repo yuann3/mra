@@ -30,7 +30,6 @@ struct ChildState {
     child_cancel: Option<CancellationToken>,
     mailbox: Arc<MailboxSlot>,
     logical_cancel: CancellationToken,
-    tracker: RestartTracker,
     alive: bool,
     hung: bool,
 }
@@ -196,8 +195,6 @@ impl SupervisorRunner {
         let task_id = abort.id();
         self.task_map.insert(task_id, name.clone());
 
-        let tracker = RestartTracker::new(&spec.config.restart_policy);
-
         let state = ChildState {
             spec,
             id,
@@ -206,10 +203,12 @@ impl SupervisorRunner {
             child_cancel: Some(child_cancel),
             mailbox,
             logical_cancel,
-            tracker,
             alive: true,
             hung: false,
         };
+
+        // Register with restart manager
+        self.restart_mgr.register(&name, state.spec.restart, &state.spec.config.restart_policy);
 
         self.children.insert(name.clone(), state);
         self.child_order.push(name.clone());
