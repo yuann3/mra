@@ -1,3 +1,15 @@
+//! Restart decision manager for the supervisor.
+//!
+//! This module consolidates all restart-related logic into a single struct:
+//! - Per-child restart tracking (backoff, limits)
+//! - Global restart intensity tracking
+//! - Policy evaluation (Permanent/Transient/Temporary)
+//! - Strategy dispatch (OneForOne/OneForAll)
+//!
+//! The `RestartManager::decide()` method is the single entry point for
+//! restart decisions. It returns a `RestartDecision` enum that tells
+//! the supervisor what to do — without blocking on backoff delays.
+
 use std::collections::HashMap;
 use std::time::Duration;
 
