@@ -5,9 +5,9 @@
 *WIP.* Don't depend on this yet.
 #+end_quote
 
-You know you can just make things right, and i just want something lightweight and make me happy. So here we go, a multi-agent runtime for Rust. Spawn AI agents as lightweight Tokio actors, wire them together, and let them talk to LLMs
+I wanted something lightweight that makes me happy. So here's a multi-agent runtime for Rust. Spawn AI agents as Tokio actors, wire them together, let them talk to LLMs.
 
-* What?
+* What is this?
 
 Each agent runs as its own async task with a bounded =mpsc= mailbox. Agents talk to each other through handles, call LLMs, and get restarted by a supervisor if they crash or stop responding. No shared mutable state.
 
@@ -24,7 +24,7 @@ let spawned = AgentSpawn::new("writer", Writer).llm(llm).spawn();
 let reply = spawned.handle.execute(Task::new("write something")).await?;
 #+end_src
 
-=AgentSpawn= is a typed builder. Only a name and behavior are required -- everything else (LLM, tools, budget, peers) defaults to empty/None. Chain setters for what you need, then call =.spawn()= for a standalone task or =.spawn_child()= for supervisor-managed agents.
+=AgentSpawn= is a typed builder. You need a name and a behavior -- everything else (LLM, tools, budget, peers) defaults to empty/None. Chain setters for what you need, then call =.spawn()= for a standalone task or =.spawn_child()= for supervisor-managed agents.
 
 Here's a behavior that calls an LLM and delegates to a peer:
 
@@ -64,7 +64,7 @@ impl AgentBehavior for Writer {
 
 * Supervision
 
-The supervisor sits in a =select!= loop watching for three things: child exits, incoming commands, and hang-check ticks. When something goes wrong, it decides what to do based on the restart policy.
+The supervisor sits in a =select!= loop watching for child exits, incoming commands, and hang-check ticks. When something goes wrong, it decides what to do based on the restart policy.
 
 Restart strategies:
 - =OneForOne= -- restart the crashed agent only
@@ -114,11 +114,23 @@ while let Ok(event) = events.recv().await {
 }
 #+end_src
 
+** How restarts work internally
+
+All restart logic lives in =RestartManager=. When a child exits, the supervisor calls =restart_mgr.decide()= and gets back one of:
+
+- =RestartAfter { delay }= -- schedule a restart after backoff
+- =RestartAll= -- trigger a cascade (OneForAll strategy)
+- =NoRestart= -- policy says don't restart
+- =ChildLimitExceeded= -- this child restarted too many times
+- =IntensityExceeded= -- supervisor-wide limit hit, shut everything down
+
+Backoff delays are non-blocking. Instead of sleeping in the supervisor loop, pending restarts go into a queue and get processed via =select!=. This keeps the supervisor responsive even when multiple agents are backing off.
+
 * Tools
 
 Agents can call tools during their =handle= loop. A tool is anything that implements the =Tool= trait -- an async function that takes JSON arguments and returns text output. The LLM sees the tool's name, description, and JSON Schema parameters, then decides when to call it.
 
-Two built-in tools ship out of the box:
+Two built-in tools:
 
 - *=ShellTool=* -- runs a shell command via =/bin/sh -c=. Configurable timeout (default 30s), =kill_on_drop=, output capped at 32 KB.
 - *=ReadFileTool=* -- reads a file and returns its contents, capped at 64 KB.
@@ -192,7 +204,7 @@ max_agents = 100
 shutdown_timeout_secs = 30
 #+end_src
 
-* Soo
+* How it fits together
 
 Each agent is two pieces:
 
