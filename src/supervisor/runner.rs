@@ -250,7 +250,7 @@ impl SupervisorRunner {
             return Ok(());
         };
 
-        let (old_gen, should_restart) = {
+        let (old_gen, hung) = {
             let Some(child) = self.children.get_mut(&name) else {
                 return Ok(());
             };
@@ -260,128 +260,57 @@ impl SupervisorRunner {
             child.child_cancel = None;
             child.progress = None;
 
-            // Hung children exit with Shutdown, which isn't a "failure" —
-            // override so Transient restart policy still kicks in.
-            let is_failure = if child.hung {
-                child.hung = false;
-                true
-            } else {
-                exit.is_failure()
-            };
-            let should_restart = child.spec.restart.should_restart(is_failure);
-            (old_gen, should_restart)
+            let hung = child.hung;
+            child.hung = false;
+
+            (old_gen, hung)
         };
 
-        let _ = self.event_tx.send(SupervisorEvent::ChildExited {
+        self.emit(SupervisorEvent::ChildExited {
             name: name.clone(),
             generation: old_gen,
-            exit,
+            exit: exit.clone(),
         });
 
-        if !should_restart || self.cancel.is_cancelled() {
+        if self.cancel.is_cancelled() {
             return Ok(());
         }
 
-        match self.config.strategy {
-            Strategy::OneForOne => {
-                // Record in per-child tracker
-                let now = tokio::time::Instant::now();
-                let child = self.children.get_mut(&name).unwrap();
-                child.tracker.record(now);
+        // Delegate restart decision to RestartManager
+        let now = tokio::time::Instant::now();
+        let decision = self.restart_mgr.decide(&name, &exit, hung, now);
 
-                if child.tracker.exceeded() {
-                    let restarts = child.tracker.total_restarts;
-                    let _ = self
-                        .event_tx
-                        .send(SupervisorEvent::ChildRestartLimitExceeded { name, restarts });
-                    return Ok(());
-                }
+        match decision {
+            RestartDecision::NoRestart => Ok(()),
 
-                // Record in per-supervisor intensity tracker
-                self.intensity.record(now);
-                if self.intensity.exceeded() {
-                    let total_restarts = self.intensity.total_restarts;
-                    let _ = self
-                        .event_tx
-                        .send(SupervisorEvent::RestartIntensityExceeded { total_restarts });
-                    self.drain_all().await;
-                    return Err(SupervisorError::RestartIntensityExceeded { total_restarts });
-                }
-
-                // Compute backoff delay and sleep
-                let child = self.children.get(&name).unwrap();
-                let delay = child.tracker.backoff_delay();
-                tokio::time::sleep(delay).await;
-
-                // Don't restart if cancelled during backoff sleep
-                if self.cancel.is_cancelled() {
-                    return Ok(());
-                }
-
-                // Build peers map from alive siblings
-                let peers: HashMap<String, AgentHandle> = self
-                    .children
-                    .iter()
-                    .filter(|(n, c)| c.alive && *n != &name)
-                    .map(|(n, c)| {
-                        (
-                            n.clone(),
-                            AgentHandle::new(c.id, c.mailbox.clone(), c.logical_cancel.clone()),
-                        )
-                    })
-                    .collect();
-
-                let child = self.children.get_mut(&name).unwrap();
-
-                // Increment generation and create new per-generation cancel token
-                let new_gen = old_gen + 1;
-                let child_cancel = child.logical_cancel.child_token();
-
-                let ctx = ChildContext {
-                    id: child.id,
-                    generation: new_gen,
-                    cancel: child_cancel.clone(),
-                    peers,
-                    llm: None,
-                    budget: self.budget.clone(),
-                    tools: ToolRegistry::new(),
-                };
-
-                let spawned = match (child.spec.factory)(ctx).await {
-                    Ok(s) => s,
-                    Err(_) => {
-                        // Factory failed — leave child dead
-                        return Ok(());
-                    }
-                };
-
-                // Hot-swap sender into stable mailbox
-                child.mailbox.swap(spawned.sender);
-
-                // Spawn new future in JoinSet
-                let abort = self.join_set.spawn(spawned.future);
-                let new_task_id = abort.id();
-                self.task_map.insert(new_task_id, name.clone());
-
-                // Update child state
-                child.generation = new_gen;
-                child.progress = Some(spawned.progress);
-                child.child_cancel = Some(child_cancel);
-                child.alive = true;
-
-                let _ = self.event_tx.send(SupervisorEvent::ChildRestarted {
+            RestartDecision::RestartAfter { delay } => {
+                // Schedule non-blocking restart
+                self.pending_restarts.push(PendingRestart {
                     name,
+                    when: now + delay,
                     old_gen,
-                    new_gen,
-                    delay,
                 });
+                Ok(())
             }
-            Strategy::OneForAll => {
-                self.restart_all(&name).await?;
+
+            RestartDecision::RestartAll => {
+                self.restart_all(&name).await
+            }
+
+            RestartDecision::ChildLimitExceeded { restarts } => {
+                self.emit(SupervisorEvent::ChildRestartLimitExceeded {
+                    name,
+                    restarts,
+                });
+                Ok(())
+            }
+
+            RestartDecision::IntensityExceeded { total_restarts } => {
+                self.emit(SupervisorEvent::RestartIntensityExceeded { total_restarts });
+                self.drain_all().await;
+                Err(SupervisorError::RestartIntensityExceeded { total_restarts })
             }
         }
-
-        Ok(())
     }
 
     async fn restart_all(&mut self, trigger_name: &str) -> Result<(), SupervisorError> {
