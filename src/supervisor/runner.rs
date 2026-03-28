@@ -19,6 +19,7 @@ use super::child::{ChildContext, ChildSpec};
 use super::config::{ChildRestart, Strategy, SupervisorConfig};
 use super::event::SupervisorEvent;
 use super::handle::SupervisorCommand;
+use super::restart_manager::{RestartDecision, RestartManager};
 use super::tracker::{IntensityTracker, RestartTracker};
 
 struct ChildState {
@@ -34,6 +35,13 @@ struct ChildState {
     hung: bool,
 }
 
+#[derive(Debug)]
+struct PendingRestart {
+    name: String,
+    when: tokio::time::Instant,
+    old_gen: u64,
+}
+
 pub(crate) struct SupervisorRunner {
     config: SupervisorConfig,
     children: HashMap<String, ChildState>,
@@ -43,7 +51,8 @@ pub(crate) struct SupervisorRunner {
     command_rx: mpsc::Receiver<SupervisorCommand>,
     event_tx: broadcast::Sender<SupervisorEvent>,
     cancel: CancellationToken,
-    intensity: IntensityTracker,
+    restart_mgr: RestartManager,
+    pending_restarts: Vec<PendingRestart>,
     budget: Option<Arc<BudgetTracker>>,
 }
 
@@ -54,7 +63,7 @@ impl SupervisorRunner {
         event_tx: broadcast::Sender<SupervisorEvent>,
         budget: Option<Arc<BudgetTracker>>,
     ) -> Self {
-        let intensity = IntensityTracker::new(config.intensity.clone());
+        let restart_mgr = RestartManager::new(&config);
         Self {
             config,
             children: HashMap::new(),
@@ -64,7 +73,8 @@ impl SupervisorRunner {
             command_rx,
             event_tx,
             cancel: CancellationToken::new(),
-            intensity,
+            restart_mgr,
+            pending_restarts: Vec::new(),
             budget,
         }
     }
