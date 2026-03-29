@@ -177,10 +177,10 @@ async fn test_supervisor_level_llm_chat_works_via_from_behavior() {
 /// (Issue #10, test plan item 3)
 #[tokio::test]
 async fn test_supervisor_level_tools_available_in_child() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use mra::tool::{Tool, ToolSpec, ToolOutput};
     use mra::error::ToolError;
+    use mra::tool::{Tool, ToolOutput, ToolSpec};
     use serde_json::Value;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     struct DummyTool;
     impl Tool for DummyTool {
@@ -195,8 +195,15 @@ async fn test_supervisor_level_tools_available_in_child() {
         fn invoke(
             &self,
             _args: Value,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput, ToolError>> + Send + '_>> {
-            Box::pin(async { Ok(ToolOutput { content: "tool-ok".into(), is_error: false }) })
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<ToolOutput, ToolError>> + Send + '_>,
+        > {
+            Box::pin(async {
+                Ok(ToolOutput {
+                    content: "tool-ok".into(),
+                    is_error: false,
+                })
+            })
         }
     }
 
@@ -210,7 +217,8 @@ async fn test_supervisor_level_tools_available_in_child() {
             ctx: &mut mra::agent::AgentCtx,
             task: Task,
         ) -> Result<AgentReply, AgentError> {
-            self.found_tool.store(ctx.tools.get("dummy").is_some(), Ordering::SeqCst);
+            self.found_tool
+                .store(ctx.tools.get("dummy").is_some(), Ordering::SeqCst);
             Ok(AgentReply {
                 task_id: task.id,
                 output: "checked".into(),

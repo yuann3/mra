@@ -98,25 +98,6 @@ impl std::fmt::Debug for SupervisorConfig {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_config_has_no_resources() {
-        let config = SupervisorConfig::default();
-        assert!(config.llm.is_none());
-        assert!(config.budget.is_none());
-    }
-
-    #[test]
-    fn with_budget_sets_budget() {
-        let budget = Arc::new(BudgetTracker::builder().global_limit(1000).build_unconnected());
-        let config = SupervisorConfig::default().with_budget(budget.clone());
-        assert!(config.budget.is_some());
-    }
-}
-
 impl SupervisorConfig {
     /// Sets the shared LLM provider for all children.
     pub fn with_llm(mut self, llm: Arc<dyn LlmProvider>) -> Self {
@@ -134,5 +115,28 @@ impl SupervisorConfig {
     pub fn with_budget(mut self, budget: Arc<BudgetTracker>) -> Self {
         self.budget = Some(budget);
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_has_no_resources() {
+        let config = SupervisorConfig::default();
+        assert!(config.llm.is_none());
+        assert!(config.budget.is_none());
+    }
+
+    #[test]
+    fn with_budget_sets_budget() {
+        let budget = Arc::new(
+            BudgetTracker::builder()
+                .global_limit(1000)
+                .build_unconnected(),
+        );
+        let config = SupervisorConfig::default().with_budget(budget.clone());
+        assert!(config.budget.is_some());
     }
 }
