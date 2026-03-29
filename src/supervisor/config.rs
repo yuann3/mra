@@ -146,41 +146,49 @@ pub struct SupervisorConfigBuilder {
 }
 
 impl SupervisorConfigBuilder {
+    /// Sets the restart strategy (`OneForOne` or `OneForAll`).
     pub fn strategy(mut self, strategy: Strategy) -> Self {
         self.inner.strategy = strategy;
         self
     }
 
+    /// Sets the restart intensity (max restarts within a time window).
     pub fn intensity(mut self, intensity: RestartIntensity) -> Self {
         self.inner.intensity = intensity;
         self
     }
 
+    /// Sets how often the supervisor checks for hung children.
     pub fn hang_check_interval(mut self, interval: Duration) -> Self {
         self.inner.hang_check_interval = interval;
         self
     }
 
+    /// Sets the broadcast channel capacity for supervisor events.
     pub fn event_capacity(mut self, capacity: usize) -> Self {
         self.inner.event_capacity = capacity;
         self
     }
 
+    /// Sets the shared LLM provider injected into all children.
     pub fn llm(mut self, llm: Arc<dyn LlmProvider>) -> Self {
         self.inner.llm = Some(llm);
         self
     }
 
+    /// Sets the shared tool registry injected into all children.
     pub fn tools(mut self, tools: ToolRegistry) -> Self {
         self.inner.tools = tools;
         self
     }
 
+    /// Sets the shared budget tracker injected into all children.
     pub fn budget(mut self, budget: Arc<BudgetTracker>) -> Self {
         self.inner.budget = Some(budget);
         self
     }
 
+    /// Builds the [`SupervisorConfig`].
     pub fn build(self) -> SupervisorConfig {
         self.inner
     }
