@@ -110,6 +110,20 @@ impl SpawnedChild {
     }
 }
 
+impl Clone for ChildSpec {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            config: self.config.clone(),
+            factory: Arc::clone(&self.factory),
+            restart: self.restart,
+            shutdown_policy: self.shutdown_policy.clone(),
+            hang_timeout: self.hang_timeout,
+            token_budget: self.token_budget,
+        }
+    }
+}
+
 impl ChildSpec {
     /// Creates a new `ChildSpec` with sensible defaults.
     ///

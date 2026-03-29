@@ -168,6 +168,7 @@ impl ChildLifecycle {
     /// Returns `None` if no tasks in JoinSet.
     /// Normalizes panics to `ChildExit::Failed`.
     /// Updates child state flags (alive, hung, progress).
+    #[allow(dead_code)] // useful for simpler supervisor implementations
     pub async fn next_exit(&mut self) -> Option<ChildExitInfo> {
         let result = self.join_set.join_next_with_id().await?;
 
@@ -328,9 +329,22 @@ impl ChildLifecycle {
         }
     }
 
+    /// Cancels all alive children except the specified one.
+    pub fn cancel_all_except(&mut self, exclude: &str) {
+        for (name, child) in self.children.iter_mut() {
+            if name != exclude && let Some(cancel) = child.child_cancel.take() {
+                cancel.cancel();
+            }
+        }
+    }
+
     /// Drains all remaining tasks. Blocks until JoinSet is empty.
+    /// Also updates child state for each exit.
     pub async fn drain(&mut self) {
-        while self.join_set.join_next().await.is_some() {}
+        while let Some(result) = self.join_set.join_next_with_id().await {
+            // Process each exit to update child state
+            let _ = self.process_exit(result);
+        }
         self.task_map.clear();
     }
 
@@ -340,8 +354,54 @@ impl ChildLifecycle {
     }
 
     /// Returns true if no children are being tracked.
+    #[allow(dead_code)] // useful for testing and future use
     pub fn is_empty(&self) -> bool {
         self.children.is_empty()
+    }
+
+    /// Returns a mutable reference to the JoinSet for use in select! loops.
+    ///
+    /// After polling with `join_set_mut().join_next_with_id()`, call
+    /// `process_exit()` to update internal state.
+    pub fn join_set_mut(&mut self) -> &mut JoinSet<ChildExit> {
+        &mut self.join_set
+    }
+
+    /// Processes a raw JoinSet result and updates internal state.
+    ///
+    /// This is the split version of `next_exit()` for use with external polling.
+    pub fn process_exit(
+        &mut self,
+        result: Result<(tokio::task::Id, ChildExit), tokio::task::JoinError>,
+    ) -> Option<ChildExitInfo> {
+        let (task_id, exit) = match result {
+            Ok((id, exit)) => (id, exit),
+            Err(e) => {
+                let id = e.id();
+                (id, ChildExit::Failed(format!("task panicked: {e}")))
+            }
+        };
+
+        let name = self.task_map.remove(&task_id)?;
+
+        let (generation, hung) = if let Some(child) = self.children.get_mut(&name) {
+            let generation = child.generation;
+            child.alive = false;
+            child.child_cancel = None;
+            child.progress = None;
+            let was_hung = child.hung;
+            child.hung = false;
+            (generation, was_hung)
+        } else {
+            return None;
+        };
+
+        Some(ChildExitInfo {
+            name,
+            generation,
+            exit,
+            hung,
+        })
     }
 }
 

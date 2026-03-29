@@ -2,36 +2,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{broadcast, mpsc, watch};
-use tokio::task::JoinSet;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::AgentHandle;
-use crate::agent::ProgressState;
-use crate::agent::mailbox::MailboxSlot;
 use crate::budget::BudgetTracker;
 use crate::error::SupervisorError;
-use crate::ids::AgentId;
-use crate::tool::ToolRegistry;
 
-use super::ChildExit;
-use super::child::{ChildContext, ChildSpec};
+use super::child::ChildSpec;
 use super::config::{ChildRestart, SupervisorConfig};
 use super::event::SupervisorEvent;
 use super::handle::SupervisorCommand;
+use super::lifecycle::{ChildExitInfo, ChildLifecycle, LifecycleConfig};
 use super::restart_manager::{RestartDecision, RestartManager};
-
-struct ChildState {
-    spec: ChildSpec,
-    id: AgentId,
-    generation: u64,
-    progress: Option<watch::Receiver<ProgressState>>,
-    child_cancel: Option<CancellationToken>,
-    mailbox: Arc<MailboxSlot>,
-    logical_cancel: CancellationToken,
-    alive: bool,
-    hung: bool,
-}
+use super::ChildExit;
 
 #[derive(Debug)]
 struct PendingRestart {
@@ -42,16 +26,14 @@ struct PendingRestart {
 
 pub(crate) struct SupervisorRunner {
     config: SupervisorConfig,
-    children: HashMap<String, ChildState>,
+    lifecycle: ChildLifecycle,
+    specs: HashMap<String, ChildSpec>,
     child_order: Vec<String>,
-    task_map: HashMap<tokio::task::Id, String>,
-    join_set: JoinSet<ChildExit>,
     command_rx: mpsc::Receiver<SupervisorCommand>,
     event_tx: broadcast::Sender<SupervisorEvent>,
     cancel: CancellationToken,
     restart_mgr: RestartManager,
     pending_restarts: Vec<PendingRestart>,
-    budget: Option<Arc<BudgetTracker>>,
 }
 
 impl SupervisorRunner {
@@ -62,18 +44,17 @@ impl SupervisorRunner {
         budget: Option<Arc<BudgetTracker>>,
     ) -> Self {
         let restart_mgr = RestartManager::new(&config);
+        let lifecycle = ChildLifecycle::new(LifecycleConfig { budget });
         Self {
             config,
-            children: HashMap::new(),
+            lifecycle,
+            specs: HashMap::new(),
             child_order: Vec::new(),
-            task_map: HashMap::new(),
-            join_set: JoinSet::new(),
             command_rx,
             event_tx,
             cancel: CancellationToken::new(),
             restart_mgr,
             pending_restarts: Vec::new(),
-            budget,
         }
     }
 
@@ -101,7 +82,7 @@ impl SupervisorRunner {
                     break Ok(());
                 }
 
-                Some(result) = self.join_set.join_next_with_id() => {
+                Some(result) = self.lifecycle.join_set_mut().join_next_with_id() => {
                     self.handle_child_exit(result).await?;
                 }
 
@@ -144,13 +125,7 @@ impl SupervisorRunner {
                 let _ = reply.send(result);
             }
             SupervisorCommand::GetChild { name, reply } => {
-                let handle = self.children.get(&name).map(|child| {
-                    AgentHandle::new(
-                        child.id,
-                        child.mailbox.clone(),
-                        child.logical_cancel.clone(),
-                    )
-                });
+                let handle = self.lifecycle.get_handle(&name);
                 let _ = reply.send(handle);
             }
             SupervisorCommand::Shutdown => {
@@ -163,73 +138,19 @@ impl SupervisorRunner {
 
     async fn do_start_child(&mut self, spec: ChildSpec) -> Result<AgentHandle, SupervisorError> {
         let name = spec.name.clone();
-        let id = AgentId::new();
-        let logical_cancel = CancellationToken::new();
-        let child_cancel = logical_cancel.child_token();
-
-        // Create stable mailbox with dummy sender
-        let (dummy_tx, _) = mpsc::channel(1);
-        let mailbox = Arc::new(MailboxSlot::new(dummy_tx));
 
         // Build peers map from existing alive children
-        let peers: HashMap<String, AgentHandle> = self
-            .children
-            .iter()
-            .filter(|(_, c)| c.alive)
-            .map(|(n, c)| {
-                (
-                    n.clone(),
-                    AgentHandle::new(c.id, c.mailbox.clone(), c.logical_cancel.clone()),
-                )
-            })
-            .collect();
-
-        // Register agent budget slot if budget tracking is active
-        if let Some(ref budget) = self.budget {
-            budget.register_agent(&name, spec.token_budget);
-        }
-
-        // Call factory
-        let ctx = ChildContext {
-            id,
-            generation: 0,
-            cancel: child_cancel.clone(),
-            peers,
-            llm: None,
-            budget: self.budget.clone(),
-            tools: ToolRegistry::new(),
-        };
-        let spawned = (spec.factory)(ctx)
-            .await
-            .map_err(|e| SupervisorError::SpawnFailed(e.to_string()))?;
-
-        // Swap real sender into stable mailbox
-        mailbox.swap(spawned.sender);
-
-        // Build the stable handle
-        let handle = AgentHandle::new(id, mailbox.clone(), logical_cancel.clone());
-
-        // Spawn future in JoinSet
-        let abort = self.join_set.spawn(spawned.future);
-        let task_id = abort.id();
-        self.task_map.insert(task_id, name.clone());
-
-        let state = ChildState {
-            spec,
-            id,
-            generation: 0,
-            progress: Some(spawned.progress),
-            child_cancel: Some(child_cancel),
-            mailbox,
-            logical_cancel,
-            alive: true,
-            hung: false,
-        };
+        let peers = self.lifecycle.peers_excluding(&name);
 
         // Register with restart manager
-        self.restart_mgr.register(&name, state.spec.restart, &state.spec.config.restart_policy);
+        self.restart_mgr.register(&name, spec.restart, &spec.config.restart_policy);
 
-        self.children.insert(name.clone(), state);
+        // Store spec for restarts
+        self.specs.insert(name.clone(), spec.clone());
+
+        // Start the child via lifecycle
+        let handle = self.lifecycle.start(spec, &peers).await?;
+
         self.child_order.push(name.clone());
 
         self.emit(SupervisorEvent::ChildStarted {
@@ -241,15 +162,10 @@ impl SupervisorRunner {
     }
 
     async fn do_stop_child(&mut self, name: &str) -> Result<(), SupervisorError> {
-        let child = self
-            .children
-            .get_mut(name)
-            .ok_or_else(|| SupervisorError::ChildNotFound(name.into()))?;
-
-        if let Some(cancel) = child.child_cancel.take() {
-            cancel.cancel();
+        if self.lifecycle.get(name).is_none() {
+            return Err(SupervisorError::ChildNotFound(name.into()));
         }
-        child.alive = false;
+        self.lifecycle.cancel_child(name);
         Ok(())
     }
 
@@ -257,37 +173,20 @@ impl SupervisorRunner {
         &mut self,
         result: Result<(tokio::task::Id, ChildExit), tokio::task::JoinError>,
     ) -> Result<(), SupervisorError> {
-        let (task_id, exit) = match result {
-            Ok((id, exit)) => (id, exit),
-            Err(e) => {
-                let id = e.id();
-                (id, ChildExit::Failed(format!("task panicked: {e}")))
-            }
-        };
-
-        let Some(name) = self.task_map.remove(&task_id) else {
+        let Some(exit_info) = self.lifecycle.process_exit(result) else {
             return Ok(());
         };
 
-        let (old_gen, hung) = {
-            let Some(child) = self.children.get_mut(&name) else {
-                return Ok(());
-            };
-
-            let old_gen = child.generation;
-            child.alive = false;
-            child.child_cancel = None;
-            child.progress = None;
-
-            let hung = child.hung;
-            child.hung = false;
-
-            (old_gen, hung)
-        };
+        let ChildExitInfo {
+            name,
+            generation,
+            exit,
+            hung,
+        } = exit_info;
 
         self.emit(SupervisorEvent::ChildExited {
             name: name.clone(),
-            generation: old_gen,
+            generation,
             exit: exit.clone(),
         });
 
@@ -307,7 +206,7 @@ impl SupervisorRunner {
                 self.pending_restarts.push(PendingRestart {
                     name,
                     when: now + delay,
-                    old_gen,
+                    old_gen: generation,
                 });
                 Ok(())
             }
@@ -334,15 +233,10 @@ impl SupervisorRunner {
 
     async fn restart_all(&mut self, trigger_name: &str) -> Result<(), SupervisorError> {
         // 1. Cancel all alive children (except the one that already exited)
-        for (name, child) in &self.children {
-            if name != trigger_name && let Some(ref cancel) = child.child_cancel {
-                cancel.cancel();
-            }
-        }
+        self.lifecycle.cancel_all_except(trigger_name);
 
         // 2. Wait for all to exit
-        while self.join_set.join_next().await.is_some() {}
-        self.task_map.clear();
+        self.lifecycle.drain().await;
 
         // 3. Record restart in RestartManager for all non-Temporary children
         let now = tokio::time::Instant::now();
@@ -358,66 +252,30 @@ impl SupervisorRunner {
         let order = self.child_order.clone();
         for child_name in &order {
             // Skip Temporary children
-            {
-                let child = self.children.get_mut(child_name).unwrap();
-                if matches!(child.spec.restart, ChildRestart::Temporary) {
-                    child.alive = false;
-                    continue;
-                }
+            let Some(spec) = self.specs.get(child_name) else {
+                continue;
+            };
+            if matches!(spec.restart, ChildRestart::Temporary) {
+                continue;
             }
 
             if self.cancel.is_cancelled() {
                 return Ok(());
             }
 
-            let (old_gen, new_gen, child_cancel, child_id) = {
-                let child = self.children.get(child_name).unwrap();
-                let old_gen = child.generation;
-                let new_gen = old_gen + 1;
-                let child_cancel = child.logical_cancel.child_token();
-                (old_gen, new_gen, child_cancel, child.id)
-            };
+            let old_gen = self.lifecycle.get(child_name).map(|c| c.generation).unwrap_or(0);
 
             // Build peers from already-respawned siblings
-            let peers: HashMap<String, AgentHandle> = self
-                .children
-                .iter()
-                .filter(|(n, c)| c.alive && *n != child_name)
-                .map(|(n, c)| {
-                    (
-                        n.clone(),
-                        AgentHandle::new(c.id, c.mailbox.clone(), c.logical_cancel.clone()),
-                    )
-                })
-                .collect();
+            let peers = self.lifecycle.peers_excluding(child_name);
 
-            let child = self.children.get_mut(child_name).unwrap();
-            let ctx = ChildContext {
-                id: child_id,
-                generation: new_gen,
-                cancel: child_cancel.clone(),
-                peers,
-                llm: None,
-                budget: self.budget.clone(),
-                tools: ToolRegistry::new(),
-            };
-
-            let spawned = match (child.spec.factory)(ctx).await {
-                Ok(s) => s,
+            // Restart via lifecycle
+            let new_gen = match self.lifecycle.restart(child_name, spec, &peers).await {
+                Ok(generation) => generation,
                 Err(_) => {
-                    child.alive = false;
+                    // Factory failed — skip this child
                     continue;
                 }
             };
-
-            child.mailbox.swap(spawned.sender);
-            let abort = self.join_set.spawn(spawned.future);
-            self.task_map.insert(abort.id(), child_name.clone());
-
-            child.generation = new_gen;
-            child.progress = Some(spawned.progress);
-            child.child_cancel = Some(child_cancel);
-            child.alive = true;
 
             self.emit(SupervisorEvent::ChildRestarted {
                 name: child_name.clone(),
@@ -432,12 +290,8 @@ impl SupervisorRunner {
 
     async fn drain_all(&mut self) {
         self.emit(SupervisorEvent::SupervisorStopping);
-        for child in self.children.values() {
-            if let Some(ref cancel) = child.child_cancel {
-                cancel.cancel();
-            }
-        }
-        while self.join_set.join_next().await.is_some() {}
+        self.lifecycle.cancel_all();
+        self.lifecycle.drain().await;
     }
 
     fn next_pending_restart(&self) -> Option<tokio::time::Instant> {
@@ -454,61 +308,28 @@ impl SupervisorRunner {
 
     async fn do_restart_child(&mut self, name: &str, old_gen: u64) -> Result<(), SupervisorError> {
         // Check child still exists and is dead with matching generation
-        let Some(child) = self.children.get(name) else {
+        let Some(child) = self.lifecycle.get(name) else {
             return Ok(());
         };
         if child.alive || child.generation != old_gen {
             return Ok(()); // Already restarted or generation mismatch
         }
 
-        // Build peers map from alive siblings
-        let peers: HashMap<String, AgentHandle> = self
-            .children
-            .iter()
-            .filter(|(n, c)| c.alive && *n != name)
-            .map(|(n, c)| {
-                (
-                    n.clone(),
-                    AgentHandle::new(c.id, c.mailbox.clone(), c.logical_cancel.clone()),
-                )
-            })
-            .collect();
-
-        let child = self.children.get_mut(name).unwrap();
-        let new_gen = old_gen + 1;
-        let child_cancel = child.logical_cancel.child_token();
-
-        let ctx = ChildContext {
-            id: child.id,
-            generation: new_gen,
-            cancel: child_cancel.clone(),
-            peers,
-            llm: None,
-            budget: self.budget.clone(),
-            tools: ToolRegistry::new(),
+        let Some(spec) = self.specs.get(name) else {
+            return Ok(());
         };
 
-        let spawned = match (child.spec.factory)(ctx).await {
-            Ok(s) => s,
+        // Build peers map from alive siblings
+        let peers = self.lifecycle.peers_excluding(name);
+
+        // Restart via lifecycle
+        let new_gen = match self.lifecycle.restart(name, spec, &peers).await {
+            Ok(generation) => generation,
             Err(_) => {
                 // Factory failed — leave child dead
                 return Ok(());
             }
         };
-
-        // Hot-swap sender into stable mailbox
-        child.mailbox.swap(spawned.sender);
-
-        // Spawn new future in JoinSet
-        let abort = self.join_set.spawn(spawned.future);
-        let new_task_id = abort.id();
-        self.task_map.insert(new_task_id, name.to_string());
-
-        // Update child state
-        child.generation = new_gen;
-        child.progress = Some(spawned.progress);
-        child.child_cancel = Some(child_cancel);
-        child.alive = true;
 
         let delay = self.restart_mgr.backoff_delay(name);
         self.emit(SupervisorEvent::ChildRestarted {
@@ -522,39 +343,18 @@ impl SupervisorRunner {
     }
 
     async fn check_hangs(&mut self) {
-        let mut hangs = Vec::new();
+        // Collect hung children first (can't borrow mutably while iterating)
+        let hangs: Vec<_> = self.lifecycle.check_hangs(&self.specs).collect();
 
-        for (name, child) in &self.children {
-            if !child.alive {
-                continue;
-            }
-            let Some(hang_timeout) = child.spec.hang_timeout else {
-                continue;
-            };
-            let Some(ref progress_rx) = child.progress else {
-                continue;
-            };
-
-            let progress = progress_rx.borrow();
-            if progress.busy && progress.last_progress.elapsed() > hang_timeout {
-                let elapsed = progress.last_progress.elapsed();
-                hangs.push((name.clone(), child.generation, elapsed));
-            }
-        }
-
-        for (name, generation, elapsed) in hangs {
-            let _ = self.event_tx.send(SupervisorEvent::HangDetected {
-                name: name.clone(),
-                generation,
-                elapsed,
+        for hung in hangs {
+            self.emit(SupervisorEvent::HangDetected {
+                name: hung.name.clone(),
+                generation: hung.generation,
+                elapsed: hung.elapsed,
             });
 
-            if let Some(child) = self.children.get_mut(&name)
-                && let Some(cancel) = child.child_cancel.take()
-            {
-                child.hung = true;
-                cancel.cancel();
-            }
+            // Cancel the hung child (marks it as hung for restart decision)
+            self.lifecycle.cancel_child(&hung.name);
         }
     }
 }
