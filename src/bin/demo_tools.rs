@@ -211,10 +211,9 @@ async fn main() -> anyhow::Result<()> {
         config.llm.model.clone(),
     ));
 
-    let sup_config = SupervisorConfig {
-        hang_check_interval: Duration::from_secs(5),
-        ..Default::default()
-    };
+    let sup_config = SupervisorConfig::builder()
+        .hang_check_interval(Duration::from_secs(5))
+        .build();
     let runtime = SwarmRuntime::with_budget(sup_config, 100_000);
 
     // Subscribe to supervisor events

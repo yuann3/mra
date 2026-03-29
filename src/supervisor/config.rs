@@ -64,11 +64,11 @@ pub struct SupervisorConfig {
     pub hang_check_interval: Duration,
     pub event_capacity: usize,
     /// Shared LLM provider injected into all children.
-    pub llm: Option<Arc<dyn LlmProvider>>,
+    llm: Option<Arc<dyn LlmProvider>>,
     /// Shared tool registry injected into all children.
-    pub tools: ToolRegistry,
+    tools: ToolRegistry,
     /// Shared budget tracker injected into all children.
-    pub budget: Option<Arc<BudgetTracker>>,
+    budget: Option<Arc<BudgetTracker>>,
 }
 
 impl Default for SupervisorConfig {
@@ -99,6 +99,28 @@ impl std::fmt::Debug for SupervisorConfig {
 }
 
 impl SupervisorConfig {
+    /// Returns a builder pre-filled with default values.
+    pub fn builder() -> SupervisorConfigBuilder {
+        SupervisorConfigBuilder {
+            inner: Self::default(),
+        }
+    }
+
+    /// Returns the shared LLM provider, if configured.
+    pub fn llm(&self) -> Option<&Arc<dyn LlmProvider>> {
+        self.llm.as_ref()
+    }
+
+    /// Returns the shared tool registry.
+    pub fn tools(&self) -> &ToolRegistry {
+        &self.tools
+    }
+
+    /// Returns the shared budget tracker, if configured.
+    pub fn budget(&self) -> Option<&Arc<BudgetTracker>> {
+        self.budget.as_ref()
+    }
+
     /// Sets the shared LLM provider for all children.
     pub fn with_llm(mut self, llm: Arc<dyn LlmProvider>) -> Self {
         self.llm = Some(llm);
@@ -118,6 +140,52 @@ impl SupervisorConfig {
     }
 }
 
+/// Builder for [`SupervisorConfig`] that avoids exhaustive struct literals.
+pub struct SupervisorConfigBuilder {
+    inner: SupervisorConfig,
+}
+
+impl SupervisorConfigBuilder {
+    pub fn strategy(mut self, strategy: Strategy) -> Self {
+        self.inner.strategy = strategy;
+        self
+    }
+
+    pub fn intensity(mut self, intensity: RestartIntensity) -> Self {
+        self.inner.intensity = intensity;
+        self
+    }
+
+    pub fn hang_check_interval(mut self, interval: Duration) -> Self {
+        self.inner.hang_check_interval = interval;
+        self
+    }
+
+    pub fn event_capacity(mut self, capacity: usize) -> Self {
+        self.inner.event_capacity = capacity;
+        self
+    }
+
+    pub fn llm(mut self, llm: Arc<dyn LlmProvider>) -> Self {
+        self.inner.llm = Some(llm);
+        self
+    }
+
+    pub fn tools(mut self, tools: ToolRegistry) -> Self {
+        self.inner.tools = tools;
+        self
+    }
+
+    pub fn budget(mut self, budget: Arc<BudgetTracker>) -> Self {
+        self.inner.budget = Some(budget);
+        self
+    }
+
+    pub fn build(self) -> SupervisorConfig {
+        self.inner
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,8 +193,8 @@ mod tests {
     #[test]
     fn default_config_has_no_resources() {
         let config = SupervisorConfig::default();
-        assert!(config.llm.is_none());
-        assert!(config.budget.is_none());
+        assert!(config.llm().is_none());
+        assert!(config.budget().is_none());
     }
 
     #[test]
@@ -137,6 +205,6 @@ mod tests {
                 .build_unconnected(),
         );
         let config = SupervisorConfig::default().with_budget(budget.clone());
-        assert!(config.budget.is_some());
+        assert!(config.budget().is_some());
     }
 }

@@ -401,10 +401,9 @@ async fn test_supervisor_one_for_all_restarts_all_children() {
         }),
     );
 
-    let config = SupervisorConfig {
-        strategy: Strategy::OneForAll,
-        ..Default::default()
-    };
+    let config = SupervisorConfig::builder()
+        .strategy(Strategy::OneForAll)
+        .build();
     let (handle, join) = SupervisorHandle::start(config);
 
     // Start "a" first (healthy), then "b" (will crash immediately)
@@ -447,10 +446,9 @@ async fn test_supervisor_detects_hung_agent() {
         }
     }
 
-    let config = SupervisorConfig {
-        hang_check_interval: Duration::from_millis(50),
-        ..Default::default()
-    };
+    let config = SupervisorConfig::builder()
+        .hang_check_interval(Duration::from_millis(50))
+        .build();
     let (handle, join) = SupervisorHandle::start(config);
     let mut events = handle.subscribe();
 

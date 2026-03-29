@@ -171,16 +171,13 @@ mod tests {
     use crate::supervisor::config::RestartIntensity;
 
     fn test_config(strategy: Strategy) -> SupervisorConfig {
-        SupervisorConfig {
-            strategy,
-            intensity: RestartIntensity {
+        SupervisorConfig::builder()
+            .strategy(strategy)
+            .intensity(RestartIntensity {
                 max_restarts: 3,
                 window: Duration::from_secs(60),
-            },
-            hang_check_interval: Duration::from_secs(1),
-            event_capacity: 64,
-            ..Default::default()
-        }
+            })
+            .build()
     }
 
     fn test_restart_policy() -> RestartPolicy {
@@ -282,16 +279,13 @@ mod tests {
 
     #[test]
     fn decide_intensity_exceeded() {
-        let config = SupervisorConfig {
-            strategy: Strategy::OneForOne,
-            intensity: RestartIntensity {
+        let config = SupervisorConfig::builder()
+            .strategy(Strategy::OneForOne)
+            .intensity(RestartIntensity {
                 max_restarts: 1,
                 window: Duration::from_secs(60),
-            },
-            hang_check_interval: Duration::from_secs(1),
-            event_capacity: 64,
-            ..Default::default()
-        };
+            })
+            .build();
         let mut mgr = RestartManager::new(&config);
         let policy = RestartPolicy {
             max_restarts: 10,
@@ -392,16 +386,13 @@ mod tests {
     #[test]
     fn record_all_tracks_intensity_and_returns_false_when_exceeded() {
         // Supervisor-wide intensity: max 2 restarts in 60s
-        let config = SupervisorConfig {
-            strategy: Strategy::OneForAll,
-            intensity: RestartIntensity {
+        let config = SupervisorConfig::builder()
+            .strategy(Strategy::OneForAll)
+            .intensity(RestartIntensity {
                 max_restarts: 2,
                 window: Duration::from_secs(60),
-            },
-            hang_check_interval: Duration::from_secs(1),
-            event_capacity: 64,
-            ..Default::default()
-        };
+            })
+            .build();
         let mut mgr = RestartManager::new(&config);
         let policy = test_restart_policy();
 

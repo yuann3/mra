@@ -47,15 +47,16 @@ impl SupervisorHandle {
 
     /// Starts a supervisor with an optional shared [`BudgetTracker`].
     ///
-    /// The `budget` parameter is merged into `config.budget` (overriding it
+    /// The `budget` parameter is merged into the config (overriding it
     /// if `Some`). Prefer using [`SupervisorConfig::with_budget`] directly.
     pub fn start_with_budget(
-        mut config: SupervisorConfig,
+        config: SupervisorConfig,
         budget: Option<Arc<BudgetTracker>>,
     ) -> (Self, JoinHandle<Result<(), SupervisorError>>) {
-        if let Some(b) = budget {
-            config.budget = Some(b);
-        }
+        let config = match budget {
+            Some(b) => config.with_budget(b),
+            None => config,
+        };
         let (command_tx, command_rx) = mpsc::channel(32);
         let (event_tx, _) = broadcast::channel(config.event_capacity);
         let runner = SupervisorRunner::new(config, command_rx, event_tx.clone());

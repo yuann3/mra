@@ -42,9 +42,9 @@ impl SupervisorRunner {
     ) -> Self {
         let restart_mgr = RestartManager::new(&config);
         let lifecycle = ChildLifecycle::new(LifecycleConfig {
-            budget: config.budget.clone(),
-            llm: config.llm.clone(),
-            tools: config.tools.clone(),
+            budget: config.budget().cloned(),
+            llm: config.llm().cloned(),
+            tools: config.tools().clone(),
         });
         Self {
             config,
