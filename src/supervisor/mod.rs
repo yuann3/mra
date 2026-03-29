@@ -4,6 +4,7 @@ pub(crate) mod child;
 mod config;
 mod event;
 mod handle;
+pub(crate) mod lifecycle;
 pub(crate) mod runner;
 pub(crate) mod tracker;
 pub(crate) mod restart_manager;
