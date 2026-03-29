@@ -15,9 +15,9 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
+use super::ChildExit;
 use super::config::{ChildRestart, Strategy, SupervisorConfig};
 use super::tracker::{IntensityTracker, RestartTracker};
-use super::ChildExit;
 use crate::config::RestartPolicy;
 
 /// Decision returned by RestartManager — tells supervisor what to do next.
@@ -63,7 +63,12 @@ impl RestartManager {
     }
 
     /// Registers a child for restart tracking. Call once on initial start.
-    pub(crate) fn register(&mut self, name: &str, restart: ChildRestart, restart_policy: &RestartPolicy) {
+    pub(crate) fn register(
+        &mut self,
+        name: &str,
+        restart: ChildRestart,
+        restart_policy: &RestartPolicy,
+    ) {
         self.children.insert(
             name.to_owned(),
             ChildRestartState {
@@ -166,15 +171,13 @@ mod tests {
     use crate::supervisor::config::RestartIntensity;
 
     fn test_config(strategy: Strategy) -> SupervisorConfig {
-        SupervisorConfig {
-            strategy,
-            intensity: RestartIntensity {
+        SupervisorConfig::builder()
+            .strategy(strategy)
+            .intensity(RestartIntensity {
                 max_restarts: 3,
                 window: Duration::from_secs(60),
-            },
-            hang_check_interval: Duration::from_secs(1),
-            event_capacity: 64,
-        }
+            })
+            .build()
     }
 
     fn test_restart_policy() -> RestartPolicy {
@@ -192,7 +195,12 @@ mod tests {
         let mut mgr = RestartManager::new(&config);
         mgr.register("temp", ChildRestart::Temporary, &test_restart_policy());
 
-        let decision = mgr.decide("temp", &ChildExit::Failed("err".into()), false, Instant::now());
+        let decision = mgr.decide(
+            "temp",
+            &ChildExit::Failed("err".into()),
+            false,
+            Instant::now(),
+        );
         assert!(matches!(decision, RestartDecision::NoRestart));
     }
 
@@ -212,7 +220,12 @@ mod tests {
         let mut mgr = RestartManager::new(&config);
         mgr.register("trans", ChildRestart::Transient, &test_restart_policy());
 
-        let decision = mgr.decide("trans", &ChildExit::Failed("err".into()), false, Instant::now());
+        let decision = mgr.decide(
+            "trans",
+            &ChildExit::Failed("err".into()),
+            false,
+            Instant::now(),
+        );
         assert!(matches!(decision, RestartDecision::RestartAfter { .. }));
     }
 
@@ -255,21 +268,24 @@ mod tests {
         assert!(matches!(d1, RestartDecision::RestartAfter { .. }));
 
         // Second restart - should exceed
-        let d2 = mgr.decide("child", &ChildExit::Failed("".into()), false, now + Duration::from_millis(1));
+        let d2 = mgr.decide(
+            "child",
+            &ChildExit::Failed("".into()),
+            false,
+            now + Duration::from_millis(1),
+        );
         assert!(matches!(d2, RestartDecision::ChildLimitExceeded { .. }));
     }
 
     #[test]
     fn decide_intensity_exceeded() {
-        let config = SupervisorConfig {
-            strategy: Strategy::OneForOne,
-            intensity: RestartIntensity {
+        let config = SupervisorConfig::builder()
+            .strategy(Strategy::OneForOne)
+            .intensity(RestartIntensity {
                 max_restarts: 1,
                 window: Duration::from_secs(60),
-            },
-            hang_check_interval: Duration::from_secs(1),
-            event_capacity: 64,
-        };
+            })
+            .build();
         let mut mgr = RestartManager::new(&config);
         let policy = RestartPolicy {
             max_restarts: 10,
@@ -284,7 +300,12 @@ mod tests {
         let d1 = mgr.decide("a", &ChildExit::Failed("".into()), false, now);
         assert!(matches!(d1, RestartDecision::RestartAfter { .. }));
 
-        let d2 = mgr.decide("b", &ChildExit::Failed("".into()), false, now + Duration::from_millis(1));
+        let d2 = mgr.decide(
+            "b",
+            &ChildExit::Failed("".into()),
+            false,
+            now + Duration::from_millis(1),
+        );
         assert!(matches!(d2, RestartDecision::IntensityExceeded { .. }));
     }
 
@@ -294,7 +315,12 @@ mod tests {
         let mut mgr = RestartManager::new(&config);
         mgr.register("child", ChildRestart::Permanent, &test_restart_policy());
 
-        let decision = mgr.decide("child", &ChildExit::Failed("".into()), false, Instant::now());
+        let decision = mgr.decide(
+            "child",
+            &ChildExit::Failed("".into()),
+            false,
+            Instant::now(),
+        );
         assert!(matches!(decision, RestartDecision::RestartAll));
     }
 
@@ -303,7 +329,12 @@ mod tests {
         let config = test_config(Strategy::OneForOne);
         let mut mgr = RestartManager::new(&config);
 
-        let decision = mgr.decide("unknown", &ChildExit::Failed("".into()), false, Instant::now());
+        let decision = mgr.decide(
+            "unknown",
+            &ChildExit::Failed("".into()),
+            false,
+            Instant::now(),
+        );
         assert!(matches!(decision, RestartDecision::NoRestart));
     }
 
@@ -321,19 +352,31 @@ mod tests {
 
         let now = Instant::now();
 
-        if let RestartDecision::RestartAfter { delay } = mgr.decide("child", &ChildExit::Failed("".into()), false, now) {
+        if let RestartDecision::RestartAfter { delay } =
+            mgr.decide("child", &ChildExit::Failed("".into()), false, now)
+        {
             assert_eq!(delay, Duration::from_millis(100));
         } else {
             panic!("expected RestartAfter");
         }
 
-        if let RestartDecision::RestartAfter { delay } = mgr.decide("child", &ChildExit::Failed("".into()), false, now + Duration::from_millis(1)) {
+        if let RestartDecision::RestartAfter { delay } = mgr.decide(
+            "child",
+            &ChildExit::Failed("".into()),
+            false,
+            now + Duration::from_millis(1),
+        ) {
             assert_eq!(delay, Duration::from_millis(200));
         } else {
             panic!("expected RestartAfter");
         }
 
-        if let RestartDecision::RestartAfter { delay } = mgr.decide("child", &ChildExit::Failed("".into()), false, now + Duration::from_millis(2)) {
+        if let RestartDecision::RestartAfter { delay } = mgr.decide(
+            "child",
+            &ChildExit::Failed("".into()),
+            false,
+            now + Duration::from_millis(2),
+        ) {
             assert_eq!(delay, Duration::from_millis(400));
         } else {
             panic!("expected RestartAfter");
@@ -343,15 +386,13 @@ mod tests {
     #[test]
     fn record_all_tracks_intensity_and_returns_false_when_exceeded() {
         // Supervisor-wide intensity: max 2 restarts in 60s
-        let config = SupervisorConfig {
-            strategy: Strategy::OneForAll,
-            intensity: RestartIntensity {
+        let config = SupervisorConfig::builder()
+            .strategy(Strategy::OneForAll)
+            .intensity(RestartIntensity {
                 max_restarts: 2,
                 window: Duration::from_secs(60),
-            },
-            hang_check_interval: Duration::from_secs(1),
-            event_capacity: 64,
-        };
+            })
+            .build();
         let mut mgr = RestartManager::new(&config);
         let policy = test_restart_policy();
 
@@ -392,10 +433,17 @@ mod tests {
 
         // Permanent child's tracker was updated — backoff doubled (2 restarts = 2^1 * base)
         let delay_perm = mgr.backoff_delay("perm");
-        assert_eq!(delay_perm, base_delay * 2, "Permanent child backoff should double");
+        assert_eq!(
+            delay_perm,
+            base_delay * 2,
+            "Permanent child backoff should double"
+        );
 
         // Temporary child's tracker was NOT updated — backoff stays at base
         let delay_temp = mgr.backoff_delay("temp");
-        assert_eq!(delay_temp, base_delay, "Temporary child backoff should not change");
+        assert_eq!(
+            delay_temp, base_delay,
+            "Temporary child backoff should not change"
+        );
     }
 }

@@ -56,6 +56,11 @@ pub struct AgentCtx {
 }
 
 impl AgentCtx {
+    /// Returns `true` if this agent has an LLM provider configured.
+    pub fn has_llm(&self) -> bool {
+        self.llm.is_some()
+    }
+
     /// Reports progress to the supervisor, resetting the hang-detection timer.
     ///
     /// Call this during long operations (e.g. LLM calls, tool invocations)

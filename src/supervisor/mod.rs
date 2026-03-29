@@ -5,12 +5,15 @@ mod config;
 mod event;
 mod handle;
 pub(crate) mod lifecycle;
+pub(crate) mod restart_manager;
 pub(crate) mod runner;
 pub(crate) mod tracker;
-pub(crate) mod restart_manager;
 
 pub use child::{ChildContext, ChildFactory, ChildSpec, SpawnedChild};
-pub use config::{ChildRestart, RestartIntensity, ShutdownPolicy, Strategy, SupervisorConfig};
+pub use config::{
+    ChildRestart, RestartIntensity, ShutdownPolicy, Strategy, SupervisorConfig,
+    SupervisorConfigBuilder,
+};
 pub use event::SupervisorEvent;
 pub use handle::SupervisorHandle;
 

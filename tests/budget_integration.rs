@@ -151,6 +151,110 @@ async fn test_per_agent_budget_limit() {
     runtime.shutdown().await;
 }
 
+/// Verifies that supervisor-level LLM injection flows through to children
+/// spawned via `from_behavior`, and `ctx.chat()` works. (Issue #10, test plan item 2)
+#[tokio::test]
+async fn test_supervisor_level_llm_chat_works_via_from_behavior() {
+    let llm: Arc<dyn LlmProvider> = Arc::new(MockLlm(100));
+
+    let config = SupervisorConfig::default().with_llm(llm);
+    let (supervisor, _join) = mra::supervisor::SupervisorHandle::start(config);
+
+    // from_behavior child — no manual LLM wiring needed
+    let spec = ChildSpec::from_behavior(AgentConfig::new("writer"), |_ctx| SimpleBehavior);
+
+    supervisor.start_child(spec).await.unwrap();
+    let handle = supervisor.child("writer").await.unwrap();
+
+    // ctx.chat() should succeed because LLM flows from supervisor config
+    let reply = handle.execute(Task::new("hello")).await.unwrap();
+    assert_eq!(reply.output, "mock");
+
+    supervisor.shutdown().await;
+}
+
+/// Verifies that supervisor-level tools are available in child's ctx.tools.
+/// (Issue #10, test plan item 3)
+#[tokio::test]
+async fn test_supervisor_level_tools_available_in_child() {
+    use mra::error::ToolError;
+    use mra::tool::{Tool, ToolOutput, ToolSpec};
+    use serde_json::Value;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct DummyTool;
+    impl Tool for DummyTool {
+        fn spec(&self) -> &ToolSpec {
+            // Leak a static spec for simplicity in test
+            Box::leak(Box::new(ToolSpec {
+                name: "dummy".into(),
+                description: "test tool".into(),
+                parameters: Value::Null,
+            }))
+        }
+        fn invoke(
+            &self,
+            _args: Value,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<ToolOutput, ToolError>> + Send + '_>,
+        > {
+            Box::pin(async {
+                Ok(ToolOutput {
+                    content: "tool-ok".into(),
+                    is_error: false,
+                })
+            })
+        }
+    }
+
+    struct ToolCheckBehavior {
+        found_tool: Arc<AtomicBool>,
+    }
+
+    impl AgentBehavior for ToolCheckBehavior {
+        async fn handle(
+            &mut self,
+            ctx: &mut mra::agent::AgentCtx,
+            task: Task,
+        ) -> Result<AgentReply, AgentError> {
+            self.found_tool
+                .store(ctx.tools.get("dummy").is_some(), Ordering::SeqCst);
+            Ok(AgentReply {
+                task_id: task.id,
+                output: "checked".into(),
+                self_tokens: 0,
+                total_tokens: 0,
+            })
+        }
+    }
+
+    let mut tools = mra::tool::ToolRegistry::new();
+    tools.register(Arc::new(DummyTool)).unwrap();
+
+    let found_tool = Arc::new(AtomicBool::new(false));
+    let found_tool2 = found_tool.clone();
+
+    let config = SupervisorConfig::default().with_tools(tools);
+    let (supervisor, _join) = mra::supervisor::SupervisorHandle::start(config);
+
+    let spec = ChildSpec::from_behavior(AgentConfig::new("tool-user"), move |_ctx| {
+        ToolCheckBehavior {
+            found_tool: found_tool2.clone(),
+        }
+    });
+
+    supervisor.start_child(spec).await.unwrap();
+    let handle = supervisor.child("tool-user").await.unwrap();
+    handle.execute(Task::new("check")).await.unwrap();
+
+    assert!(
+        found_tool.load(Ordering::SeqCst),
+        "from_behavior child should have supervisor-level tools in ctx.tools"
+    );
+
+    supervisor.shutdown().await;
+}
+
 #[tokio::test]
 async fn test_no_budget_means_unlimited() {
     let llm: Arc<dyn LlmProvider> = Arc::new(MockLlm(100));

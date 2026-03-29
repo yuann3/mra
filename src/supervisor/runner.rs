@@ -1,21 +1,19 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::AgentHandle;
-use crate::budget::BudgetTracker;
 use crate::error::SupervisorError;
 
+use super::ChildExit;
 use super::child::ChildSpec;
 use super::config::{ChildRestart, SupervisorConfig};
 use super::event::SupervisorEvent;
 use super::handle::SupervisorCommand;
 use super::lifecycle::{ChildExitInfo, ChildLifecycle, LifecycleConfig};
 use super::restart_manager::{RestartDecision, RestartManager};
-use super::ChildExit;
 
 #[derive(Debug)]
 struct PendingRestart {
@@ -41,10 +39,13 @@ impl SupervisorRunner {
         config: SupervisorConfig,
         command_rx: mpsc::Receiver<SupervisorCommand>,
         event_tx: broadcast::Sender<SupervisorEvent>,
-        budget: Option<Arc<BudgetTracker>>,
     ) -> Self {
         let restart_mgr = RestartManager::new(&config);
-        let lifecycle = ChildLifecycle::new(LifecycleConfig { budget });
+        let lifecycle = ChildLifecycle::new(LifecycleConfig {
+            budget: config.budget().cloned(),
+            llm: config.llm().cloned(),
+            tools: config.tools().clone(),
+        });
         Self {
             config,
             lifecycle,
@@ -143,7 +144,8 @@ impl SupervisorRunner {
         let peers = self.lifecycle.peers_excluding(&name);
 
         // Register with restart manager
-        self.restart_mgr.register(&name, spec.restart, &spec.config.restart_policy);
+        self.restart_mgr
+            .register(&name, spec.restart, &spec.config.restart_policy);
 
         // Store spec for restarts
         self.specs.insert(name.clone(), spec.clone());
@@ -211,15 +213,10 @@ impl SupervisorRunner {
                 Ok(())
             }
 
-            RestartDecision::RestartAll => {
-                self.restart_all(&name).await
-            }
+            RestartDecision::RestartAll => self.restart_all(&name).await,
 
             RestartDecision::ChildLimitExceeded { restarts } => {
-                self.emit(SupervisorEvent::ChildRestartLimitExceeded {
-                    name,
-                    restarts,
-                });
+                self.emit(SupervisorEvent::ChildRestartLimitExceeded { name, restarts });
                 Ok(())
             }
 
@@ -263,7 +260,11 @@ impl SupervisorRunner {
                 return Ok(());
             }
 
-            let old_gen = self.lifecycle.get(child_name).map(|c| c.generation).unwrap_or(0);
+            let old_gen = self
+                .lifecycle
+                .get(child_name)
+                .map(|c| c.generation)
+                .unwrap_or(0);
 
             // Build peers from already-respawned siblings
             let peers = self.lifecycle.peers_excluding(child_name);

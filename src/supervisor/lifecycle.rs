@@ -18,8 +18,8 @@ use crate::error::SupervisorError;
 use crate::ids::AgentId;
 use crate::tool::ToolRegistry;
 
-use super::child::{ChildContext, ChildSpec};
 use super::ChildExit;
+use super::child::{ChildContext, ChildSpec};
 
 /// Runtime state for a single child.
 pub struct ChildRecord {
@@ -45,6 +45,10 @@ pub struct ChildRecord {
 pub struct LifecycleConfig {
     /// Shared budget tracker (if any).
     pub budget: Option<Arc<BudgetTracker>>,
+    /// Shared LLM provider (if any).
+    pub llm: Option<Arc<dyn crate::llm::LlmProvider>>,
+    /// Shared tool registry.
+    pub tools: ToolRegistry,
 }
 
 /// Information about a child exit, returned by `next_exit()`.
@@ -125,9 +129,9 @@ impl ChildLifecycle {
             generation: 0,
             cancel: child_cancel.clone(),
             peers: peers.clone(),
-            llm: None,
+            llm: self.config.llm.clone(),
             budget: self.config.budget.clone(),
-            tools: ToolRegistry::new(),
+            tools: self.config.tools.clone(),
         };
 
         let spawned = (spec.factory)(ctx)
@@ -272,9 +276,9 @@ impl ChildLifecycle {
             generation: new_gen,
             cancel: child_cancel.clone(),
             peers: peers.clone(),
-            llm: None,
+            llm: self.config.llm.clone(),
             budget: self.config.budget.clone(),
-            tools: ToolRegistry::new(),
+            tools: self.config.tools.clone(),
         };
 
         let spawned = (spec.factory)(ctx)
@@ -332,7 +336,9 @@ impl ChildLifecycle {
     /// Cancels all alive children except the specified one.
     pub fn cancel_all_except(&mut self, exclude: &str) {
         for (name, child) in self.children.iter_mut() {
-            if name != exclude && let Some(cancel) = child.child_cancel.take() {
+            if name != exclude
+                && let Some(cancel) = child.child_cancel.take()
+            {
                 cancel.cancel();
             }
         }
@@ -431,13 +437,15 @@ mod tests {
 
     #[tokio::test]
     async fn start_returns_working_handle() {
-        let config = LifecycleConfig { budget: None };
+        let config = LifecycleConfig {
+            budget: None,
+            llm: None,
+            tools: ToolRegistry::new(),
+        };
         let mut lifecycle = ChildLifecycle::new(config);
 
-        let spec = ChildSpec::from_behavior(
-            AgentConfig::new("test-child"),
-            |_| ImmediateExitBehavior,
-        );
+        let spec =
+            ChildSpec::from_behavior(AgentConfig::new("test-child"), |_| ImmediateExitBehavior);
 
         let peers = HashMap::new();
         let handle = lifecycle.start(spec, &peers).await.unwrap();
@@ -456,13 +464,14 @@ mod tests {
 
     #[tokio::test]
     async fn next_exit_returns_exit_info_when_child_exits() {
-        let config = LifecycleConfig { budget: None };
+        let config = LifecycleConfig {
+            budget: None,
+            llm: None,
+            tools: ToolRegistry::new(),
+        };
         let mut lifecycle = ChildLifecycle::new(config);
 
-        let spec = ChildSpec::from_behavior(
-            AgentConfig::new("exiter"),
-            |_| ImmediateExitBehavior,
-        );
+        let spec = ChildSpec::from_behavior(AgentConfig::new("exiter"), |_| ImmediateExitBehavior);
 
         let peers = HashMap::new();
         let _handle = lifecycle.start(spec, &peers).await.unwrap();
@@ -486,12 +495,16 @@ mod tests {
 
     #[tokio::test]
     async fn next_exit_normalizes_panics_to_failed() {
-        use std::sync::Arc;
-        use std::pin::Pin;
-        use std::future::Future;
         use super::super::child::SpawnedChild;
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
 
-        let config = LifecycleConfig { budget: None };
+        let config = LifecycleConfig {
+            budget: None,
+            llm: None,
+            tools: ToolRegistry::new(),
+        };
         let mut lifecycle = ChildLifecycle::new(config);
 
         // Create a spec with a factory that returns a panicking future
@@ -500,14 +513,14 @@ mod tests {
             AgentConfig::new("panicker"),
             Arc::new(|_ctx| {
                 Box::pin(async {
-                    Ok(SpawnedChild::from_future(
-                        Box::pin(async {
-                            panic!("intentional test panic");
-                            #[allow(unreachable_code)]
-                            ChildExit::Normal
-                        }) as Pin<Box<dyn Future<Output = ChildExit> + Send>>
-                    ))
-                }) as Pin<Box<dyn Future<Output = Result<SpawnedChild, SupervisorError>> + Send>>
+                    Ok(SpawnedChild::from_future(Box::pin(async {
+                        panic!("intentional test panic");
+                        #[allow(unreachable_code)]
+                        ChildExit::Normal
+                    })
+                        as Pin<Box<dyn Future<Output = ChildExit> + Send>>))
+                })
+                    as Pin<Box<dyn Future<Output = Result<SpawnedChild, SupervisorError>> + Send>>
             }),
         );
 
@@ -522,15 +535,16 @@ mod tests {
     }
 
     fn make_spec(name: &str) -> ChildSpec {
-        ChildSpec::from_behavior(
-            AgentConfig::new(name),
-            |_| ImmediateExitBehavior,
-        )
+        ChildSpec::from_behavior(AgentConfig::new(name), |_| ImmediateExitBehavior)
     }
 
     #[tokio::test]
     async fn restart_fails_if_child_is_alive() {
-        let config = LifecycleConfig { budget: None };
+        let config = LifecycleConfig {
+            budget: None,
+            llm: None,
+            tools: ToolRegistry::new(),
+        };
         let mut lifecycle = ChildLifecycle::new(config);
 
         let spec = make_spec("alive-child");
@@ -546,7 +560,11 @@ mod tests {
 
     #[tokio::test]
     async fn restart_succeeds_and_increments_generation() {
-        let config = LifecycleConfig { budget: None };
+        let config = LifecycleConfig {
+            budget: None,
+            llm: None,
+            tools: ToolRegistry::new(),
+        };
         let mut lifecycle = ChildLifecycle::new(config);
 
         let spec = make_spec("restartable");
@@ -559,7 +577,10 @@ mod tests {
 
         // Now restart
         let spec2 = make_spec("restartable");
-        let new_gen = lifecycle.restart("restartable", &spec2, &peers).await.unwrap();
+        let new_gen = lifecycle
+            .restart("restartable", &spec2, &peers)
+            .await
+            .unwrap();
         assert_eq!(new_gen, 1);
 
         // Child should be alive again
@@ -570,15 +591,16 @@ mod tests {
 
     #[tokio::test]
     async fn peers_excluding_returns_correct_handles() {
-        let config = LifecycleConfig { budget: None };
+        let config = LifecycleConfig {
+            budget: None,
+            llm: None,
+            tools: ToolRegistry::new(),
+        };
         let mut lifecycle = ChildLifecycle::new(config);
 
         // Start 3 children
         for name in ["alice", "bob", "charlie"] {
-            let spec = ChildSpec::from_behavior(
-                AgentConfig::new(name),
-                |_| ImmediateExitBehavior,
-            );
+            let spec = ChildSpec::from_behavior(AgentConfig::new(name), |_| ImmediateExitBehavior);
             let peers = lifecycle.peers_excluding(name);
             lifecycle.start(spec, &peers).await.unwrap();
         }
@@ -592,16 +614,143 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_passes_llm_and_tools_from_config() {
+        use super::super::child::SpawnedChild;
+        use crate::llm::{LlmProvider, LlmRequest, LlmResponse};
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct DummyLlm;
+        impl LlmProvider for DummyLlm {
+            fn chat<'a>(
+                &'a self,
+                _req: &'a LlmRequest,
+            ) -> Pin<
+                Box<dyn Future<Output = Result<LlmResponse, crate::error::LlmError>> + Send + 'a>,
+            > {
+                Box::pin(async { unreachable!() })
+            }
+        }
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(DummyLlm);
+        let tools = ToolRegistry::new();
+
+        let config = LifecycleConfig {
+            budget: None,
+            llm: Some(llm.clone()),
+            tools: tools.clone(),
+        };
+        let mut lifecycle = ChildLifecycle::new(config);
+
+        let got_llm = Arc::new(AtomicBool::new(false));
+        let got_llm2 = got_llm.clone();
+
+        let spec = ChildSpec::new(
+            "checker",
+            AgentConfig::new("checker"),
+            Arc::new(move |ctx: ChildContext| {
+                let got_llm = got_llm2.clone();
+                Box::pin(async move {
+                    // Verify ChildContext received the LLM from config
+                    got_llm.store(ctx.llm.is_some(), Ordering::SeqCst);
+                    Ok(SpawnedChild::from_future(
+                        Box::pin(async { ChildExit::Normal })
+                            as Pin<Box<dyn Future<Output = ChildExit> + Send>>,
+                    ))
+                })
+                    as Pin<Box<dyn Future<Output = Result<SpawnedChild, SupervisorError>> + Send>>
+            }),
+        );
+
+        let _handle = lifecycle.start(spec, &HashMap::new()).await.unwrap();
+        assert!(
+            got_llm.load(Ordering::SeqCst),
+            "ChildContext should have received LLM from config"
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_passes_llm_and_tools_from_config() {
+        use super::super::child::SpawnedChild;
+        use crate::llm::{LlmProvider, LlmRequest, LlmResponse};
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct DummyLlm;
+        impl LlmProvider for DummyLlm {
+            fn chat<'a>(
+                &'a self,
+                _req: &'a LlmRequest,
+            ) -> Pin<
+                Box<dyn Future<Output = Result<LlmResponse, crate::error::LlmError>> + Send + 'a>,
+            > {
+                Box::pin(async { unreachable!() })
+            }
+        }
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(DummyLlm);
+
+        let config = LifecycleConfig {
+            budget: None,
+            llm: Some(llm.clone()),
+            tools: ToolRegistry::new(),
+        };
+        let mut lifecycle = ChildLifecycle::new(config);
+
+        let got_llm = Arc::new(AtomicBool::new(false));
+        let got_llm2 = got_llm.clone();
+
+        let factory: super::super::child::ChildFactory = Arc::new(move |ctx: ChildContext| {
+            let got_llm = got_llm2.clone();
+            Box::pin(async move {
+                got_llm.store(ctx.llm.is_some(), Ordering::SeqCst);
+                Ok(SpawnedChild::from_future(
+                    Box::pin(async { ChildExit::Normal })
+                        as Pin<Box<dyn Future<Output = ChildExit> + Send>>,
+                ))
+            })
+                as Pin<Box<dyn Future<Output = Result<SpawnedChild, SupervisorError>> + Send>>
+        });
+
+        let spec = ChildSpec::new("checker", AgentConfig::new("checker"), factory.clone());
+        let _handle = lifecycle.start(spec, &HashMap::new()).await.unwrap();
+
+        // Kill and wait for exit
+        lifecycle.cancel_child("checker");
+        let _ = lifecycle.next_exit().await.unwrap();
+
+        // Reset flag
+        got_llm.store(false, Ordering::SeqCst);
+
+        // Restart — should also pass LLM
+        let spec2 = ChildSpec::new("checker", AgentConfig::new("checker"), factory);
+        lifecycle
+            .restart("checker", &spec2, &HashMap::new())
+            .await
+            .unwrap();
+
+        assert!(
+            got_llm.load(Ordering::SeqCst),
+            "ChildContext should have LLM on restart too"
+        );
+    }
+
+    #[tokio::test]
     async fn cancel_all_and_drain_shuts_down_everything() {
-        let config = LifecycleConfig { budget: None };
+        let config = LifecycleConfig {
+            budget: None,
+            llm: None,
+            tools: ToolRegistry::new(),
+        };
         let mut lifecycle = ChildLifecycle::new(config);
 
         // Start 3 children
         for name in ["a", "b", "c"] {
-            let spec = ChildSpec::from_behavior(
-                AgentConfig::new(name),
-                |_| ImmediateExitBehavior,
-            );
+            let spec = ChildSpec::from_behavior(AgentConfig::new(name), |_| ImmediateExitBehavior);
             lifecycle.start(spec, &HashMap::new()).await.unwrap();
         }
 
@@ -611,8 +760,8 @@ mod tests {
 
         // All children should be marked as not alive (after drain, JoinSet is empty)
         // Note: drain() doesn't update child state, but the JoinSet should be empty
-        assert!(lifecycle.is_empty() == false); // children still tracked
-        
+        assert!(!lifecycle.is_empty()); // children still tracked
+
         // But we can verify no more exits come
         // Actually, after drain, all tasks are gone from JoinSet
     }
