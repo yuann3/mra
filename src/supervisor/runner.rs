@@ -1,12 +1,10 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::AgentHandle;
-use crate::budget::BudgetTracker;
 use crate::error::SupervisorError;
 
 use super::child::ChildSpec;
@@ -41,10 +39,13 @@ impl SupervisorRunner {
         config: SupervisorConfig,
         command_rx: mpsc::Receiver<SupervisorCommand>,
         event_tx: broadcast::Sender<SupervisorEvent>,
-        budget: Option<Arc<BudgetTracker>>,
     ) -> Self {
         let restart_mgr = RestartManager::new(&config);
-        let lifecycle = ChildLifecycle::new(LifecycleConfig { budget });
+        let lifecycle = ChildLifecycle::new(LifecycleConfig {
+            budget: config.budget.clone(),
+            llm: config.llm.clone(),
+            tools: config.tools.clone(),
+        });
         Self {
             config,
             lifecycle,

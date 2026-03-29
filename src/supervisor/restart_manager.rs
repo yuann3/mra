@@ -174,6 +174,7 @@ mod tests {
             },
             hang_check_interval: Duration::from_secs(1),
             event_capacity: 64,
+            ..Default::default()
         }
     }
 
@@ -269,6 +270,7 @@ mod tests {
             },
             hang_check_interval: Duration::from_secs(1),
             event_capacity: 64,
+            ..Default::default()
         };
         let mut mgr = RestartManager::new(&config);
         let policy = RestartPolicy {
@@ -351,6 +353,7 @@ mod tests {
             },
             hang_check_interval: Duration::from_secs(1),
             event_capacity: 64,
+            ..Default::default()
         };
         let mut mgr = RestartManager::new(&config);
         let policy = test_restart_policy();
