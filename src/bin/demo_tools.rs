@@ -122,8 +122,8 @@ impl AgentBehavior for Coder {
             });
 
             // Execute each tool call and feed results back as Tool messages.
-            // This is the key feedback loop: LLM picks tools, we run them,
-            // results go back into the conversation for the next turn.
+            // The LLM picks tools, we run them, results go back into the
+            // conversation for the next turn.
             for call in &response.tool_calls {
                 let args_display = truncate_display(&call.arguments.to_string(), 120);
                 println!("    [*] {}: {}", call.name, args_display);
