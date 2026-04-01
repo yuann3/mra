@@ -3,6 +3,12 @@ name = "mra"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.91"
+description = "Tokio-native multi-agent runtime with Erlang-style supervision"
+keywords = ["agent", "actor", "tokio", "supervision", "llm"]
+categories = ["asynchronous", "concurrency"]
+readme = "README.org"
+repository = "https://github.com/yuann3/mra"
+license = "MIT"
 
 [dependencies]
 arc-swap = "1"

@@ -1,3 +1,8 @@
+//! Message types for the agent mailbox.
+//!
+//! [`Task`] is inbound work submitted via [`AgentHandle::execute`](super::AgentHandle::execute).
+//! [`AgentReply`] is the outbound result returned through a `oneshot` channel.
+
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 

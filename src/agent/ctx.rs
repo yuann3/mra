@@ -1,3 +1,9 @@
+//! Runtime context passed to agent behaviors.
+//!
+//! Owns LLM access, tool dispatch, budget enforcement, peer handles,
+//! and heartbeat reporting. The supervisor injects these at spawn time;
+//! behaviors receive the context as `&mut AgentCtx` in every `handle` call.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

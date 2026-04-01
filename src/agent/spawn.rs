@@ -1,3 +1,9 @@
+//! Typed builder for wiring an agent's dependencies and spawning
+//! the handle + runner pair.
+//!
+//! Only a name and behavior are required. Optional setters inject
+//! LLM, tools, budget, peers, and cancellation tokens.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

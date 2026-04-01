@@ -1,3 +1,9 @@
+//! Channel-based handle for sending commands to the supervisor task.
+//!
+//! Start/stop children, query handles, subscribe to events, and
+//! initiate shutdown. All operations are non-blocking and safe to
+//! call from any Tokio task.
+
 use std::sync::Arc;
 
 use tokio::sync::{broadcast, mpsc, oneshot};

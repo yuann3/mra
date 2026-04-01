@@ -1,3 +1,9 @@
+//! Cloneable external API for sending tasks to an agent.
+//!
+//! Routes messages through a stable `ArcSwap` mailbox slot that the
+//! supervisor hot-swaps on restart, so existing handles remain valid
+//! across agent generations.
+
 use std::sync::Arc;
 
 use tokio::sync::oneshot;

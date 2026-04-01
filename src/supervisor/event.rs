@@ -1,3 +1,8 @@
+//! Supervisor lifecycle events broadcast to subscribers.
+//!
+//! Subscribe via [`SupervisorHandle::subscribe`](super::SupervisorHandle::subscribe)
+//! to observe starts, stops, restarts, hangs, and limit breaches.
+
 use std::time::Duration;
 
 use super::ChildExit;

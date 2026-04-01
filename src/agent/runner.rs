@@ -1,3 +1,8 @@
+//! Internal event loop that receives messages and calls `AgentBehavior::handle`.
+//!
+//! Runs inside a supervisor `JoinSet`. Not public API — users interact
+//! with agents through [`AgentHandle`](super::AgentHandle).
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

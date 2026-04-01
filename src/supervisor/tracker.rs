@@ -1,3 +1,9 @@
+//! Windowed restart counters.
+//!
+//! [`RestartTracker`] tracks per-child restarts with exponential backoff.
+//! [`IntensityTracker`] tracks supervisor-wide restart frequency.
+//! Both are internal building blocks for [`RestartManager`](super::restart_manager::RestartManager).
+
 use std::collections::VecDeque;
 use std::time::Duration;
 

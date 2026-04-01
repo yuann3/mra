@@ -1,3 +1,8 @@
+//! Configuration types for the supervisor.
+//!
+//! Restart strategy, per-child restart policy, supervisor-wide restart
+//! intensity, shutdown grace period, and the [`SupervisorConfig`] builder.
+
 use std::sync::Arc;
 use std::time::Duration;
 

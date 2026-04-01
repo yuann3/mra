@@ -1,3 +1,5 @@
+//! Binary entry point for the mra crate.
+
 use mra::ids::AgentId;
 
 fn main() {

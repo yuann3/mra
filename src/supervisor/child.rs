@@ -1,3 +1,9 @@
+//! Child specification and factory types.
+//!
+//! [`ChildSpec`] defines how to create and configure a supervised agent.
+//! [`ChildContext`] carries supervisor-injected dependencies (peers, LLM,
+//! budget, tools) into the factory on each spawn/restart.
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;

@@ -1,3 +1,9 @@
+//! The supervisor's main `select!` loop.
+//!
+//! Coordinates child exits, restart scheduling, hang detection, and
+//! command processing. Internal only — users interact through
+//! [`SupervisorHandle`](super::SupervisorHandle).
+
 use std::collections::HashMap;
 use std::time::Duration;
 
