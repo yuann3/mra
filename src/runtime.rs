@@ -23,6 +23,18 @@ pub struct SwarmRuntime {
 
 impl SwarmRuntime {
     /// Creates a new runtime backed by a supervisor with the given config.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mra::runtime::SwarmRuntime;
+    /// use mra::supervisor::SupervisorConfig;
+    ///
+    /// # async fn example() {
+    /// let runtime = SwarmRuntime::new(SupervisorConfig::default());
+    /// runtime.shutdown().await;
+    /// # }
+    /// ```
     pub fn new(config: SupervisorConfig) -> Self {
         let (supervisor, join) = SupervisorHandle::start(config);
         Self {

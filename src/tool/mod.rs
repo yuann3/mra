@@ -73,6 +73,17 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     /// Creates an empty registry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use mra::tool::{ToolRegistry, ShellTool};
+    ///
+    /// let mut registry = ToolRegistry::new();
+    /// registry.register(Arc::new(ShellTool::new())).unwrap();
+    /// assert_eq!(registry.specs().len(), 1);
+    /// ```
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),

@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! # mra — Multi-agent Runtime Architecture
 //!
 //! A Tokio-native framework for running concurrent AI agents as lightweight

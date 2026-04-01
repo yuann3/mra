@@ -107,22 +107,29 @@ impl Default for RuntimeConfig {
 /// LLM provider configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct LlmConfig {
+    /// API key for the LLM provider.
     pub api_key: String,
+    /// Default model identifier.
     pub model: String,
+    /// Base URL for the provider's API.
     pub base_url: String,
 }
 
 /// File-friendly runtime configuration with seconds instead of `Duration`.
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct RuntimeConfigFile {
+    /// Maximum number of agents the runtime will accept.
     pub max_agents: usize,
+    /// Shutdown timeout in seconds.
     pub shutdown_timeout_secs: u64,
 }
 
 /// Top-level configuration loaded from `mra.toml` + env vars.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MraConfig {
+    /// LLM provider settings.
     pub llm: LlmConfig,
+    /// Runtime settings.
     pub runtime: RuntimeConfigFile,
 }
 

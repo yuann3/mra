@@ -72,13 +72,21 @@ impl AgentError {
 pub enum SupervisorError {
     /// An agent has been restarted too many times within its restart window.
     #[error("restart limit exceeded for agent {agent_id}: {restarts} restarts")]
-    RestartLimitExceeded { agent_id: AgentId, restarts: u32 },
+    RestartLimitExceeded {
+        /// ID of the agent that exceeded the limit.
+        agent_id: AgentId,
+        /// Number of restarts before the limit was hit.
+        restarts: u32,
+    },
     /// Failed to spawn a new agent task.
     #[error("failed to spawn agent: {0}")]
     SpawnFailed(String),
     /// The supervisor's global restart intensity has been exceeded.
     #[error("restart intensity exceeded: {total_restarts} restarts")]
-    RestartIntensityExceeded { total_restarts: u64 },
+    RestartIntensityExceeded {
+        /// Total restarts across all children.
+        total_restarts: u64,
+    },
     /// No child with the given name exists.
     #[error("child not found: {0}")]
     ChildNotFound(String),
@@ -134,7 +142,12 @@ impl ToolError {
 pub enum LlmError {
     /// The LLM API returned an HTTP error. 5xx is transient, 4xx is permanent.
     #[error("API error (status {status}): {message}")]
-    ApiError { status: u16, message: String },
+    ApiError {
+        /// HTTP status code.
+        status: u16,
+        /// Response body or error description.
+        message: String,
+    },
     /// The LLM request timed out.
     #[error("LLM request timed out")]
     Timeout,
@@ -188,6 +201,7 @@ impl BudgetError {
 /// Configuration validation errors.
 #[derive(Debug, Error)]
 pub enum ConfigError {
+    /// A configuration value failed validation.
     #[error("invalid configuration: {0}")]
     Invalid(String),
 }
@@ -197,16 +211,22 @@ pub enum ConfigError {
 /// Each variant wraps a subsystem error and supports `?` conversion via `#[from]`.
 #[derive(Debug, Error)]
 pub enum MraError {
+    /// Agent behavior error.
     #[error(transparent)]
     Agent(#[from] AgentError),
+    /// Supervisor error.
     #[error(transparent)]
     Supervisor(#[from] SupervisorError),
+    /// Tool execution error.
     #[error(transparent)]
     Tool(#[from] ToolError),
+    /// LLM provider error.
     #[error(transparent)]
     Llm(#[from] LlmError),
+    /// Budget/quota error.
     #[error(transparent)]
     Budget(#[from] BudgetError),
+    /// Configuration error.
     #[error(transparent)]
     Config(#[from] ConfigError),
 }

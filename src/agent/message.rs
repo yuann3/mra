@@ -15,8 +15,11 @@ use crate::ids::TaskId;
 /// instruction, and an optional JSON context blob for structured input.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Task {
+    /// Unique identifier for correlation with [`AgentReply::task_id`].
     pub id: TaskId,
+    /// Human-readable instruction describing the work.
     pub instruction: String,
+    /// Optional structured input (default: `Value::Null`).
     pub context: serde_json::Value,
 }
 

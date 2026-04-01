@@ -41,6 +41,30 @@ pub use spawn::AgentSpawn;
 /// Uses native `async fn` in traits (RPITIT, Rust 1.75+). The runner
 /// is generic over `B: AgentBehavior` rather than using `dyn` dispatch,
 /// so there is no per-call heap allocation.
+///
+/// # Examples
+///
+/// ```
+/// use mra::agent::{AgentBehavior, AgentCtx, AgentReply, Task};
+/// use mra::error::AgentError;
+///
+/// struct Echo;
+///
+/// impl AgentBehavior for Echo {
+///     async fn handle(
+///         &mut self,
+///         _ctx: &mut AgentCtx,
+///         input: Task,
+///     ) -> Result<AgentReply, AgentError> {
+///         Ok(AgentReply {
+///             task_id: input.id,
+///             output: input.instruction,
+///             self_tokens: 0,
+///             total_tokens: 0,
+///         })
+///     }
+/// }
+/// ```
 pub trait AgentBehavior: Send + 'static {
     /// Processes a single task and returns a reply.
     ///

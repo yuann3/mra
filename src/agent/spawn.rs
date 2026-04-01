@@ -45,6 +45,22 @@ impl<B: AgentBehavior> AgentSpawn<B> {
     ///
     /// Defaults: fresh `AgentId`, `AgentConfig::new(name)`, no peers,
     /// no LLM, fresh `CancellationToken`, no budget, empty tools.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use mra::agent::{AgentBehavior, AgentCtx, AgentReply, AgentSpawn, Task};
+    /// # use mra::error::AgentError;
+    /// # struct Echo;
+    /// # impl AgentBehavior for Echo {
+    /// #     async fn handle(&mut self, _ctx: &mut AgentCtx, input: Task)
+    /// #         -> Result<AgentReply, AgentError> {
+    /// #         Ok(AgentReply { task_id: input.id, output: input.instruction,
+    /// #             self_tokens: 0, total_tokens: 0 })
+    /// #     }
+    /// # }
+    /// let spawned = AgentSpawn::new("echo", Echo).spawn();
+    /// ```
     pub fn new(name: impl Into<String>, behavior: B) -> Self {
         let name = name.into();
         Self::from_config(AgentConfig::new(&name), behavior)

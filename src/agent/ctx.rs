@@ -44,6 +44,7 @@ pub struct ToolLoopResult {
 /// Provides the agent's identity, peer handles for delegation, an
 /// optional LLM provider, budget tracking, and a tool registry.
 pub struct AgentCtx {
+    /// This agent's unique identifier.
     pub id: AgentId,
     /// Human-readable name, used as the key for budget tracking.
     pub name: String,

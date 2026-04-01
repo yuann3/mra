@@ -18,13 +18,17 @@ use crate::error::AgentError;
 
 /// Read-only snapshot of global token usage.
 pub struct RunUsage {
+    /// Tokens consumed so far.
     pub used: u64,
+    /// Configured limit (`None` = unlimited).
     pub limit: Option<u64>,
 }
 
 /// Read-only snapshot of per-agent token usage.
 pub struct AgentUsage {
+    /// Tokens consumed by this agent.
     pub used: u64,
+    /// Configured limit for this agent (`None` = unlimited).
     pub limit: Option<u64>,
 }
 
@@ -80,6 +84,17 @@ pub struct BudgetTracker {
 
 impl BudgetTracker {
     /// Creates a new builder.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mra::budget::BudgetTracker;
+    ///
+    /// let tracker = BudgetTracker::builder()
+    ///     .global_limit(100_000)
+    ///     .build_unconnected();
+    /// assert!(!tracker.is_global_exceeded());
+    /// ```
     pub fn builder() -> BudgetTrackerBuilder {
         BudgetTrackerBuilder { global_limit: None }
     }

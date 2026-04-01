@@ -32,6 +32,8 @@ pub enum ChildRestart {
 }
 
 impl ChildRestart {
+    /// Returns `true` if this policy says the child should be restarted
+    /// given whether the exit was a failure.
     pub fn should_restart(&self, is_failure: bool) -> bool {
         match self {
             Self::Permanent => true,
@@ -128,6 +130,18 @@ impl std::fmt::Debug for SupervisorConfig {
 
 impl SupervisorConfig {
     /// Returns a builder pre-filled with default values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use mra::supervisor::{SupervisorConfig, Strategy};
+    ///
+    /// let config = SupervisorConfig::builder()
+    ///     .strategy(Strategy::OneForAll)
+    ///     .hang_check_interval(Duration::from_secs(10))
+    ///     .build();
+    /// ```
     pub fn builder() -> SupervisorConfigBuilder {
         SupervisorConfigBuilder {
             inner: Self::default(),

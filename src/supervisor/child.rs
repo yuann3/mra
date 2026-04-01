@@ -173,8 +173,22 @@ impl ChildSpec {
     /// copy. In practice this is not a problem because `ChildSpec` is consumed
     /// by [`crate::supervisor::SupervisorHandle::start_child`] and not mutated after construction.
     ///
-    /// ```ignore
-    /// ChildSpec::from_behavior(AgentConfig::new("echo"), |_| EchoBehavior)
+    /// # Examples
+    ///
+    /// ```
+    /// # use mra::agent::{AgentBehavior, AgentCtx, AgentReply, Task};
+    /// # use mra::config::AgentConfig;
+    /// # use mra::error::AgentError;
+    /// # use mra::supervisor::ChildSpec;
+    /// # struct Echo;
+    /// # impl AgentBehavior for Echo {
+    /// #     async fn handle(&mut self, _ctx: &mut AgentCtx, input: Task)
+    /// #         -> Result<AgentReply, AgentError> {
+    /// #         Ok(AgentReply { task_id: input.id, output: input.instruction,
+    /// #             self_tokens: 0, total_tokens: 0 })
+    /// #     }
+    /// # }
+    /// let spec = ChildSpec::from_behavior(AgentConfig::new("echo"), |_| Echo);
     /// ```
     pub fn from_behavior<B, F>(config: AgentConfig, make_behavior: F) -> Self
     where
