@@ -12,6 +12,11 @@ use tokio::time::Instant;
 use super::config::RestartIntensity;
 use crate::config::RestartPolicy;
 
+/// Per-child restart counter with exponential backoff.
+///
+/// Maintains a sliding window of restart timestamps. Computes backoff
+/// as `base * 2^n` capped at `backoff_max`, where `n` is the number of
+/// restarts in the current window.
 pub(crate) struct RestartTracker {
     timestamps: VecDeque<Instant>,
     max_restarts: u32,
@@ -53,6 +58,10 @@ impl RestartTracker {
     }
 }
 
+/// Supervisor-wide restart frequency tracker.
+///
+/// Counts all restarts across all children within a rolling window.
+/// When exceeded, the supervisor shuts down entirely.
 pub(crate) struct IntensityTracker {
     timestamps: VecDeque<Instant>,
     intensity: RestartIntensity,

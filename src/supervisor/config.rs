@@ -10,17 +10,24 @@ use crate::budget::BudgetTracker;
 use crate::llm::LlmProvider;
 use crate::tool::ToolRegistry;
 
+/// Restart strategy applied when a child exits.
 #[derive(Debug, Clone, Copy)]
 pub enum Strategy {
+    /// Only the failed child is restarted.
     OneForOne,
+    /// All children are terminated and restarted when any one fails.
     OneForAll,
 }
 
+/// Per-child restart policy evaluated on exit.
 #[derive(Debug, Clone, Copy, Default)]
 pub enum ChildRestart {
+    /// Always restart, regardless of exit reason.
     Permanent,
+    /// Restart only on failure (not on normal exit or shutdown).
     #[default]
     Transient,
+    /// Never restart. The child runs at most once.
     Temporary,
 }
 
@@ -34,8 +41,11 @@ impl ChildRestart {
     }
 }
 
+/// Controls how long the supervisor waits for a child to drain work
+/// before hard-killing it. Default grace period is 5 seconds.
 #[derive(Debug, Clone)]
 pub struct ShutdownPolicy {
+    /// Time to wait after sending shutdown before cancelling the child.
     pub grace: Duration,
 }
 
@@ -47,9 +57,15 @@ impl Default for ShutdownPolicy {
     }
 }
 
+/// Supervisor-wide restart rate limit.
+///
+/// If more than `max_restarts` occur within `window`, the supervisor
+/// shuts down all children and returns an error.
 #[derive(Debug, Clone)]
 pub struct RestartIntensity {
+    /// Maximum number of restarts allowed within `window`.
     pub max_restarts: u32,
+    /// Rolling time window for counting restarts.
     pub window: Duration,
 }
 
@@ -62,11 +78,18 @@ impl Default for RestartIntensity {
     }
 }
 
+/// Complete configuration for a supervisor instance.
+///
+/// Use [`SupervisorConfig::builder()`] to construct.
 #[derive(Clone)]
 pub struct SupervisorConfig {
+    /// Restart strategy (`OneForOne` or `OneForAll`).
     pub strategy: Strategy,
+    /// Supervisor-wide restart rate limit.
     pub intensity: RestartIntensity,
+    /// How often the supervisor polls children for hang detection.
     pub hang_check_interval: Duration,
+    /// Broadcast channel capacity for [`SupervisorEvent`](super::SupervisorEvent)s.
     pub event_capacity: usize,
     /// Shared LLM provider injected into all children.
     llm: Option<Arc<dyn LlmProvider>>,

@@ -20,18 +20,22 @@ use super::config::{ChildRestart, Strategy, SupervisorConfig};
 use super::tracker::{IntensityTracker, RestartTracker};
 use crate::config::RestartPolicy;
 
-/// Decision returned by RestartManager — tells supervisor what to do next.
+/// What the supervisor should do after a child exits.
+///
+/// Returned synchronously by [`RestartManager::decide`]. The supervisor
+/// is responsible for scheduling any backoff delay and executing the
+/// restart or shutdown.
 #[derive(Debug, Clone)]
 pub enum RestartDecision {
-    /// Restart this child after the specified delay.
+    /// Restart this child after the specified backoff delay.
     RestartAfter { delay: Duration },
-    /// Restart all children in order (OneForAll cascade).
+    /// Restart all children in insertion order (OneForAll cascade).
     RestartAll,
-    /// Don't restart — policy says no (Temporary, or Transient+Normal exit).
+    /// Don't restart (Temporary child, or Transient with normal exit).
     NoRestart,
-    /// Don't restart — child exceeded its per-child restart limit.
+    /// Per-child restart limit exceeded; child will not be restarted again.
     ChildLimitExceeded { restarts: u64 },
-    /// Don't restart — supervisor-wide intensity limit exceeded (fatal).
+    /// Supervisor-wide intensity limit exceeded; supervisor shuts down.
     IntensityExceeded { total_restarts: u64 },
 }
 

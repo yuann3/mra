@@ -27,21 +27,26 @@ use super::config::{ChildRestart, ShutdownPolicy};
 
 use crate::agent::AgentMessage;
 
-/// Context passed to a [`ChildFactory`] on each spawn/restart.
+/// Supervisor-injected dependencies passed to a [`ChildFactory`] on each
+/// spawn/restart.
+///
+/// The supervisor populates these fields from its own config and from
+/// the current set of alive siblings. The factory uses them to wire up
+/// the new agent instance.
 pub struct ChildContext {
-    /// Stable logical id for this child.
+    /// Stable logical id for this child (same across restarts).
     pub id: AgentId,
-    /// Restart generation (0 = first start, 1 = first restart, …).
+    /// Restart generation (0 = first start, 1 = first restart, ...).
     pub generation: u64,
-    /// Per-generation cancellation token.
+    /// Per-generation cancellation token (child of the logical token).
     pub cancel: CancellationToken,
-    /// Named peer handles.
+    /// Named handles to alive sibling agents.
     pub peers: HashMap<String, AgentHandle>,
-    /// Shared LLM provider.
+    /// Shared LLM provider from supervisor config, if any.
     pub llm: Option<Arc<dyn LlmProvider>>,
-    /// Shared budget tracker.
+    /// Shared budget tracker from supervisor config, if any.
     pub budget: Option<Arc<BudgetTracker>>,
-    /// Tool registry for this agent.
+    /// Tool registry from supervisor config.
     pub tools: ToolRegistry,
 }
 
@@ -80,6 +85,10 @@ pub type ChildFactory = Arc<
 >;
 
 /// Specification for a supervised child agent.
+///
+/// Defines the name, configuration, restart policy, and factory closure
+/// for a child. Pass to [`SupervisorHandle::start_child`](super::SupervisorHandle::start_child)
+/// to spawn the agent under supervision.
 pub struct ChildSpec {
     /// Human-readable name (unique within the supervisor).
     pub name: String,
