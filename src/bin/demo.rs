@@ -1,4 +1,4 @@
-//! Research pipeline demo: researcher → writer → editor.
+//! Research pipeline demo: researcher -> writer -> editor.
 //!
 //! Three agents form a sequential pipeline under an Erlang-style
 //! supervisor. Each calls the LLM via OpenRouter, then delegates to
@@ -40,8 +40,12 @@ const EDITOR_SYSTEM: &str = "\
 You are an editor. Polish the given article for clarity, grammar, and \
 flow. Return the improved version.";
 
+/// First stage of the pipeline. Calls the LLM to produce research notes
+/// from a user-supplied topic, then forwards those notes to the Writer.
 struct Researcher;
 
+/// Researcher calls the LLM once, then delegates to the Writer peer.
+/// The peer handle comes from supervisor injection — no manual wiring.
 impl AgentBehavior for Researcher {
     async fn handle(&mut self, ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
         let task_id = input.id;
@@ -83,6 +87,8 @@ impl AgentBehavior for Researcher {
     }
 }
 
+/// Second stage. Takes research notes from the Researcher and produces
+/// a draft article, then hands it off to the Editor for polishing.
 struct Writer;
 
 impl AgentBehavior for Writer {
@@ -125,6 +131,8 @@ impl AgentBehavior for Writer {
     }
 }
 
+/// Final stage. Polishes the Writer's draft for clarity and grammar.
+/// This is the terminal node — it returns directly instead of delegating.
 struct Editor;
 
 impl AgentBehavior for Editor {
@@ -213,26 +221,29 @@ async fn main() -> anyhow::Result<()> {
         config.llm.model.clone(),
     ));
 
+    // The supervisor checks every 5s for hung agents and restarts them.
+    // A global token budget of 50k caps total LLM spend across all agents.
     let sup_config = SupervisorConfig::builder()
         .hang_check_interval(Duration::from_secs(5))
         .build();
     let runtime = SwarmRuntime::with_budget(sup_config, 50_000);
 
-    // Subscribe to supervisor events and log them in the background
+    // Subscribe to supervisor lifecycle events so we can print them.
+    // Events fire on start, exit, restart, hang detection, and budget limits.
     let mut events = runtime.subscribe();
     tokio::spawn(async move {
         while let Ok(event) = events.recv().await {
             match event {
                 SupervisorEvent::SupervisorStarted => {
-                    println!("🟢 Supervisor started");
+                    println!("[+] Supervisor started");
                 }
                 SupervisorEvent::ChildStarted { name, generation } => {
-                    println!("  ✅ Agent '{name}' started (gen {generation})");
+                    println!("  [ok] Agent '{name}' started (gen {generation})");
                 }
                 SupervisorEvent::ChildExited {
                     name, generation, ..
                 } => {
-                    println!("  ⛔ Agent '{name}' exited (gen {generation})");
+                    println!("  [x] Agent '{name}' exited (gen {generation})");
                 }
                 SupervisorEvent::ChildRestarted {
                     name,
@@ -241,7 +252,7 @@ async fn main() -> anyhow::Result<()> {
                     delay,
                 } => {
                     println!(
-                        "  🔄 Agent '{name}' restarted: gen {old_gen} → {new_gen} (after {delay:?})"
+                        "  [~] Agent '{name}' restarted: gen {old_gen} -> {new_gen} (after {delay:?})"
                     );
                 }
                 SupervisorEvent::HangDetected {
@@ -250,28 +261,28 @@ async fn main() -> anyhow::Result<()> {
                     elapsed,
                 } => {
                     println!(
-                        "  ⏳ Hang detected: '{name}' gen {generation} unresponsive for {elapsed:?}"
+                        "  [?] Hang detected: '{name}' gen {generation} unresponsive for {elapsed:?}"
                     );
                 }
                 SupervisorEvent::SupervisorStopping => {
-                    println!("🔴 Supervisor stopping...");
+                    println!("[!] Supervisor stopping...");
                 }
                 SupervisorEvent::ChildRestartLimitExceeded { name, restarts } => {
-                    println!("  ❌ Agent '{name}' restart limit exceeded ({restarts} restarts)");
+                    println!("  [ERR] Agent '{name}' restart limit exceeded ({restarts} restarts)");
                 }
                 SupervisorEvent::RestartIntensityExceeded { total_restarts } => {
-                    println!("  ❌ Global restart intensity exceeded ({total_restarts} restarts)");
+                    println!("  [ERR] Global restart intensity exceeded ({total_restarts} restarts)");
                 }
                 SupervisorEvent::BudgetExceeded { name, used, limit } => {
-                    println!("  💰 Budget exceeded: '{name}' ({used}/{limit} tokens)");
+                    println!("  [$] Budget exceeded: '{name}' ({used}/{limit} tokens)");
                 }
             }
         }
     });
 
-    // Spawn agents in dependency order (editor first, then writer, then researcher).
-    // The supervisor auto-injects peer handles — each agent can see its
-    // already-started siblings via ctx.peers.
+    // Spawn agents in dependency order: editor first, then writer, then researcher.
+    // The supervisor auto-injects peer handles so each agent can look up
+    // its already-started siblings by name via ctx.peers.
     runtime
         .spawn(agent_spec("editor", llm.clone(), || Editor))
         .await?;
@@ -286,20 +297,20 @@ async fn main() -> anyhow::Result<()> {
         .nth(1)
         .unwrap_or_else(|| "the history of the Rust programming language".into());
 
-    println!("\n📚 Submitting topic: {topic}");
-    println!("🔄 Pipeline: researcher → writer → editor\n");
+    println!("\n[>] Submitting topic: {topic}");
+    println!("[~] Pipeline: researcher -> writer -> editor\n");
 
     let researcher = runtime.get_handle_by_name("researcher").await.unwrap();
     let reply = researcher.execute(Task::new(&topic)).await?;
 
     println!(
-        "\n✅ Final output ({} total tokens across pipeline):\n",
+        "\n[ok] Final output ({} total tokens across pipeline):\n",
         reply.total_tokens
     );
     println!("{}", reply.output);
 
     // Print per-agent token breakdown
-    println!("\n📊 Token usage breakdown:");
+    println!("\n[#] Token usage breakdown:");
     if let Some(usage) = runtime.token_usage() {
         println!(
             "   Global: {} / {} tokens",

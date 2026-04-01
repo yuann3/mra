@@ -39,8 +39,12 @@ Run cargo clippy, then fix any warnings you find. \
 Read files to understand the code before making changes. \
 Use edit_file with exact old_text matches to make surgical edits.";
 
-/// The agent behavior. Implements its own tool loop (rather than using
-/// `ctx.chat_with_tools()`) so it can print each tool call as it happens.
+/// The coding agent. Runs its own tool-call loop rather than using
+/// `ctx.chat_with_tools()` so it can print each tool invocation as it happens.
+///
+/// On each iteration the LLM either returns a text response (done) or
+/// one or more tool calls. We execute the tools, append results as Tool
+/// messages, and loop back for the next LLM turn.
 struct Coder;
 
 /// Cuts a string to `max` bytes on a char boundary, appending "..." if truncated.
@@ -79,6 +83,8 @@ impl AgentBehavior for Coder {
         let mut total_prompt = 0u64;
         let mut total_completion = 0u64;
 
+        // Each iteration is one LLM round-trip. The loop exits when the LLM
+        // replies with plain text (no tool calls) or we hit the iteration cap.
         for iteration in 1..=MAX_ITERATIONS {
             let request = LlmRequest {
                 model: None,
@@ -93,7 +99,7 @@ impl AgentBehavior for Coder {
             total_completion += response.completion_tokens;
 
             if response.tool_calls.is_empty() {
-                println!("  📝 Iteration {iteration}: agent responded with text");
+                println!("  [.] Iteration {iteration}: agent responded with text");
                 return Ok(AgentReply {
                     task_id,
                     output: response.content,
@@ -103,7 +109,7 @@ impl AgentBehavior for Coder {
             }
 
             println!(
-                "  🔄 Iteration {iteration}: {} tool call(s)",
+                "  [~] Iteration {iteration}: {} tool call(s)",
                 response.tool_calls.len()
             );
 
@@ -115,10 +121,12 @@ impl AgentBehavior for Coder {
                 tool_call_id: None,
             });
 
-            // Execute each tool call
+            // Execute each tool call and feed results back as Tool messages.
+            // This is the key feedback loop: LLM picks tools, we run them,
+            // results go back into the conversation for the next turn.
             for call in &response.tool_calls {
                 let args_display = truncate_display(&call.arguments.to_string(), 120);
-                println!("    🔧 {}: {}", call.name, args_display);
+                println!("    [*] {}: {}", call.name, args_display);
 
                 let tool_result = match ctx.call_tool(&call.name, call.arguments.clone()).await {
                     Ok(output) => output,
@@ -128,7 +136,7 @@ impl AgentBehavior for Coder {
                     },
                 };
 
-                let status = if tool_result.is_error { "❌" } else { "✅" };
+                let status = if tool_result.is_error { "[ERR]" } else { "[ok]" };
                 let content_display = truncate_display(&tool_result.content, 200);
                 println!("    {status} {content_display}");
 
@@ -143,7 +151,7 @@ impl AgentBehavior for Coder {
             ctx.report_progress();
         }
 
-        println!("  ⚠️  Max iterations ({MAX_ITERATIONS}) reached");
+        println!("  [!] Max iterations ({MAX_ITERATIONS}) reached");
         Ok(AgentReply {
             task_id,
             output: "Max iterations reached".into(),
@@ -222,15 +230,15 @@ async fn main() -> anyhow::Result<()> {
         while let Ok(event) = events.recv().await {
             match event {
                 SupervisorEvent::SupervisorStarted => {
-                    println!("🟢 Supervisor started");
+                    println!("[+] Supervisor started");
                 }
                 SupervisorEvent::ChildStarted { name, generation } => {
-                    println!("  ✅ Agent '{name}' started (gen {generation})");
+                    println!("  [ok] Agent '{name}' started (gen {generation})");
                 }
                 SupervisorEvent::ChildExited {
                     name, generation, ..
                 } => {
-                    println!("  ⛔ Agent '{name}' exited (gen {generation})");
+                    println!("  [x] Agent '{name}' exited (gen {generation})");
                 }
                 SupervisorEvent::ChildRestarted {
                     name,
@@ -239,7 +247,7 @@ async fn main() -> anyhow::Result<()> {
                     delay,
                 } => {
                     println!(
-                        "  🔄 Agent '{name}' restarted: gen {old_gen} → {new_gen} (after {delay:?})"
+                        "  [~] Agent '{name}' restarted: gen {old_gen} -> {new_gen} (after {delay:?})"
                     );
                 }
                 SupervisorEvent::HangDetected {
@@ -248,20 +256,20 @@ async fn main() -> anyhow::Result<()> {
                     elapsed,
                 } => {
                     println!(
-                        "  ⏳ Hang detected: '{name}' gen {generation} unresponsive for {elapsed:?}"
+                        "  [?] Hang detected: '{name}' gen {generation} unresponsive for {elapsed:?}"
                     );
                 }
                 SupervisorEvent::SupervisorStopping => {
-                    println!("🔴 Supervisor stopping...");
+                    println!("[!] Supervisor stopping...");
                 }
                 SupervisorEvent::ChildRestartLimitExceeded { name, restarts } => {
-                    println!("  ❌ Agent '{name}' restart limit exceeded ({restarts} restarts)");
+                    println!("  [ERR] Agent '{name}' restart limit exceeded ({restarts} restarts)");
                 }
                 SupervisorEvent::RestartIntensityExceeded { total_restarts } => {
-                    println!("  ❌ Global restart intensity exceeded ({total_restarts} restarts)");
+                    println!("  [ERR] Global restart intensity exceeded ({total_restarts} restarts)");
                 }
                 SupervisorEvent::BudgetExceeded { name, used, limit } => {
-                    println!("  💰 Budget exceeded: '{name}' ({used}/{limit} tokens)");
+                    println!("  [$] Budget exceeded: '{name}' ({used}/{limit} tokens)");
                 }
             }
         }
@@ -274,18 +282,18 @@ async fn main() -> anyhow::Result<()> {
         "Run cargo clippy on this project, read any files with warnings, and fix the issues".into()
     });
 
-    println!("\n🔧 Task: {task}");
-    println!("🛠️  Tools: shell, read_file, edit_file");
-    println!("🔄 Max iterations: {MAX_ITERATIONS}\n");
+    println!("\n[*] Task: {task}");
+    println!("[*] Tools: shell, read_file, edit_file");
+    println!("[~] Max iterations: {MAX_ITERATIONS}\n");
 
     let coder = runtime.get_handle_by_name("coder").await.unwrap();
     let reply = coder.execute(Task::new(&task)).await?;
 
-    println!("\n✅ Done ({} total tokens):\n", reply.total_tokens);
+    println!("\n[ok] Done ({} total tokens):\n", reply.total_tokens);
     println!("{}", reply.output);
 
     // Token breakdown
-    println!("\n📊 Token usage:");
+    println!("\n[#] Token usage:");
     if let Some(usage) = runtime.token_usage() {
         println!(
             "   Global: {} / {} tokens",
