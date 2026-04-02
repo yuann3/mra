@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use wasmtime::{Engine, Linker, Module, Store, StoreLimitsBuilder};
-use wasmtime_wasi::preview1::WasiP1Ctx;
 use wasmtime_wasi::WasiCtxBuilder;
+use wasmtime_wasi::p1::WasiP1Ctx;
 
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolOutput, ToolSpec};
@@ -82,8 +82,8 @@ impl Tool for WasmTool {
         Box::pin(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
 
-            let json_bytes = serde_json::to_vec(&args)
-                .map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+            let json_bytes =
+                serde_json::to_vec(&args).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
 
             let engine = self.runtime.engine().clone();
             let module = self.module.clone();
@@ -102,7 +102,7 @@ impl Tool for WasmTool {
     }
 }
 
-fn map_trap(e: anyhow::Error) -> ToolError {
+fn map_trap(e: wasmtime::Error) -> ToolError {
     if let Some(trap) = e.downcast_ref::<wasmtime::Trap>() {
         if *trap == wasmtime::Trap::Interrupt {
             return ToolError::ResourceExhausted;
@@ -119,9 +119,7 @@ fn invoke_in_store(
     epoch_deadline: u64,
 ) -> Result<ToolOutput, ToolError> {
     let wasi = WasiCtxBuilder::new().build_p1();
-    let limits = StoreLimitsBuilder::new()
-        .memory_size(max_memory)
-        .build();
+    let limits = StoreLimitsBuilder::new().memory_size(max_memory).build();
 
     let mut store = Store::new(engine, StoreState { wasi, limits });
     store.limiter(|state| &mut state.limits);
@@ -129,10 +127,8 @@ fn invoke_in_store(
     store.epoch_deadline_trap();
 
     let mut linker = Linker::new(engine);
-    wasmtime_wasi::preview1::add_to_linker_sync(&mut linker, |state: &mut StoreState| {
-        &mut state.wasi
-    })
-    .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+    wasmtime_wasi::p1::add_to_linker_sync(&mut linker, |state: &mut StoreState| &mut state.wasi)
+        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
     let instance = linker
         .instantiate(&mut store, module)
@@ -153,11 +149,15 @@ fn invoke_in_store(
         .get_memory(&mut store, "memory")
         .ok_or_else(|| ToolError::WasmTrap("missing memory export".into()))?;
 
-    let write_end = (ptr as usize).checked_add(json_bytes.len()).ok_or_else(|| {
-        ToolError::WasmTrap("alloc returned pointer that overflows address space".into())
-    })?;
+    let write_end = (ptr as usize)
+        .checked_add(json_bytes.len())
+        .ok_or_else(|| {
+            ToolError::WasmTrap("alloc returned pointer that overflows address space".into())
+        })?;
     if write_end > memory.data_size(&store) {
-        return Err(ToolError::WasmTrap("alloc returned out-of-bounds pointer".into()));
+        return Err(ToolError::WasmTrap(
+            "alloc returned out-of-bounds pointer".into(),
+        ));
     }
     memory.data_mut(&mut store)[ptr as usize..write_end].copy_from_slice(json_bytes);
 
@@ -170,7 +170,9 @@ fn invoke_in_store(
         ToolError::WasmTrap("invoke returned pointer that overflows address space".into())
     })?;
     if read_end > memory.data_size(&store) {
-        return Err(ToolError::WasmTrap("invoke returned out-of-bounds pointer".into()));
+        return Err(ToolError::WasmTrap(
+            "invoke returned out-of-bounds pointer".into(),
+        ));
     }
     let result_bytes = memory.data(&store)[result_ptr..read_end].to_vec();
 

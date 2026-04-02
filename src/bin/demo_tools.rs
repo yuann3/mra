@@ -136,7 +136,11 @@ impl AgentBehavior for Coder {
                     },
                 };
 
-                let status = if tool_result.is_error { "[ERR]" } else { "[ok]" };
+                let status = if tool_result.is_error {
+                    "[ERR]"
+                } else {
+                    "[ok]"
+                };
                 let content_display = truncate_display(&tool_result.content, 200);
                 println!("    {status} {content_display}");
 
@@ -266,7 +270,9 @@ async fn main() -> anyhow::Result<()> {
                     println!("  [ERR] Agent '{name}' restart limit exceeded ({restarts} restarts)");
                 }
                 SupervisorEvent::RestartIntensityExceeded { total_restarts } => {
-                    println!("  [ERR] Global restart intensity exceeded ({total_restarts} restarts)");
+                    println!(
+                        "  [ERR] Global restart intensity exceeded ({total_restarts} restarts)"
+                    );
                 }
                 SupervisorEvent::BudgetExceeded { name, used, limit } => {
                     println!("  [$] Budget exceeded: '{name}' ({used}/{limit} tokens)");

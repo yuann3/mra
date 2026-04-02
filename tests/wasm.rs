@@ -127,7 +127,12 @@ fn manifest_rejects_memory_over_hard_cap() {
         [limits]
         max_memory_bytes = 536870912
     "#;
-    assert!(WasmToolManifest::parse(toml).unwrap_err().to_string().contains("hard cap"));
+    assert!(
+        WasmToolManifest::parse(toml)
+            .unwrap_err()
+            .to_string()
+            .contains("hard cap")
+    );
 }
 
 // --- Tool discovery ---
@@ -204,7 +209,9 @@ async fn swarm_runtime_loads_wasm_tools_into_registry() {
         epoch_tick_ms: Some(100),
     };
 
-    let count = runtime.load_wasm_tools(&wasm_config, &mut registry).unwrap();
+    let count = runtime
+        .load_wasm_tools(&wasm_config, &mut registry)
+        .unwrap();
     assert_eq!(count, 1);
 
     // Invoke the WASM tool through the registry
@@ -229,9 +236,7 @@ async fn native_and_wasm_tools_coexist() {
     let mut registry = ToolRegistry::new();
 
     // Register a native tool
-    registry
-        .register(Arc::new(ShellTool::new()))
-        .unwrap();
+    registry.register(Arc::new(ShellTool::new())).unwrap();
 
     // Load WASM tools
     let wasm_config = WasmConfig {
@@ -239,7 +244,9 @@ async fn native_and_wasm_tools_coexist() {
         thread_pool_size: Some(2),
         epoch_tick_ms: Some(100),
     };
-    runtime.load_wasm_tools(&wasm_config, &mut registry).unwrap();
+    runtime
+        .load_wasm_tools(&wasm_config, &mut registry)
+        .unwrap();
 
     // Both tools are accessible
     assert!(registry.get("shell").is_some());
@@ -339,11 +346,7 @@ fn wasm_missing_invoke_export() {
     .unwrap();
     // Minimal valid WASM module with no exports
     // (module) in binary format
-    std::fs::write(
-        tool_dir.join("empty.wasm"),
-        b"\x00asm\x01\x00\x00\x00",
-    )
-    .unwrap();
+    std::fs::write(tool_dir.join("empty.wasm"), b"\x00asm\x01\x00\x00\x00").unwrap();
 
     // This should load OK (it's valid wasm), but invoking should fail
     let tools = runtime.load_tools(dir.path()).unwrap();
@@ -353,7 +356,10 @@ fn wasm_missing_invoke_export() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(tools[0].invoke(json!({})));
     assert!(
-        matches!(result, Err(ToolError::ExecutionFailed(_)) | Err(ToolError::WasmTrap(_))),
+        matches!(
+            result,
+            Err(ToolError::ExecutionFailed(_)) | Err(ToolError::WasmTrap(_))
+        ),
         "expected error for missing export, got: {result:?}"
     );
 }

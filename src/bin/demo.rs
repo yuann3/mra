@@ -271,7 +271,9 @@ async fn main() -> anyhow::Result<()> {
                     println!("  [ERR] Agent '{name}' restart limit exceeded ({restarts} restarts)");
                 }
                 SupervisorEvent::RestartIntensityExceeded { total_restarts } => {
-                    println!("  [ERR] Global restart intensity exceeded ({total_restarts} restarts)");
+                    println!(
+                        "  [ERR] Global restart intensity exceeded ({total_restarts} restarts)"
+                    );
                 }
                 SupervisorEvent::BudgetExceeded { name, used, limit } => {
                     println!("  [$] Budget exceeded: '{name}' ({used}/{limit} tokens)");
