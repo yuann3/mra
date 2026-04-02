@@ -104,6 +104,18 @@ impl Default for RuntimeConfig {
     }
 }
 
+/// WASM sandbox configuration.
+#[derive(Debug, Clone)]
+pub struct WasmConfig {
+    /// Path to the directory containing WASM tool subdirectories.
+    pub tools_dir: std::path::PathBuf,
+    /// Number of threads in the dedicated WASM thread pool.
+    /// Defaults to the number of CPU cores.
+    pub thread_pool_size: Option<usize>,
+    /// Epoch tick interval in milliseconds. Defaults to 100.
+    pub epoch_tick_ms: Option<u64>,
+}
+
 /// LLM provider configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct LlmConfig {

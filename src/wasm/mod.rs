@@ -40,6 +40,14 @@ impl WasmRuntime {
     ///
     /// Enables epoch interruption on the engine and spawns the ticker thread.
     pub fn new() -> Result<Self, anyhow::Error> {
+        Self::with_options(num_cpus::get(), EPOCH_TICK_INTERVAL_MS)
+    }
+
+    /// Creates a new WASM runtime with custom thread pool size and tick interval.
+    pub fn with_options(
+        thread_pool_size: usize,
+        epoch_tick_ms: u64,
+    ) -> Result<Self, anyhow::Error> {
         let mut config = wasmtime::Config::new();
         config.cranelift_opt_level(wasmtime::OptLevel::Speed);
         config.epoch_interruption(true);
@@ -47,7 +55,7 @@ impl WasmRuntime {
         let engine = Engine::new(&config)?;
 
         let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(num_cpus::get())
+            .num_threads(thread_pool_size)
             .build()?;
 
         let ticker_stop = Arc::new(AtomicBool::new(false));
@@ -55,7 +63,7 @@ impl WasmRuntime {
         let stop = ticker_stop.clone();
         let ticker_thread = thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
-                thread::sleep(Duration::from_millis(EPOCH_TICK_INTERVAL_MS));
+                thread::sleep(Duration::from_millis(epoch_tick_ms));
                 ticker_engine.increment_epoch();
             }
         });

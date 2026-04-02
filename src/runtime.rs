@@ -19,6 +19,8 @@ pub struct SwarmRuntime {
     supervisor: SupervisorHandle,
     join: JoinHandle<Result<(), SupervisorError>>,
     budget: Option<Arc<BudgetTracker>>,
+    #[cfg(feature = "wasm")]
+    _wasm_runtime: Option<Arc<crate::wasm::WasmRuntime>>,
 }
 
 impl SwarmRuntime {
@@ -41,6 +43,8 @@ impl SwarmRuntime {
             supervisor,
             join,
             budget: None,
+            #[cfg(feature = "wasm")]
+            _wasm_runtime: None,
         }
     }
 
@@ -60,7 +64,37 @@ impl SwarmRuntime {
             supervisor,
             join,
             budget: Some(budget),
+            #[cfg(feature = "wasm")]
+            _wasm_runtime: None,
         }
+    }
+
+    /// Loads WASM tools from the given config and registers them in the provided registry.
+    ///
+    /// Returns the number of tools loaded. The `WasmRuntime` is kept alive for
+    /// the lifetime of this `SwarmRuntime`.
+    #[cfg(feature = "wasm")]
+    pub fn load_wasm_tools(
+        &mut self,
+        wasm_config: &crate::config::WasmConfig,
+        registry: &mut crate::tool::ToolRegistry,
+    ) -> Result<usize, anyhow::Error> {
+        let pool_size = wasm_config.thread_pool_size.unwrap_or_else(num_cpus::get);
+        let tick_ms = wasm_config
+            .epoch_tick_ms
+            .unwrap_or(crate::wasm::EPOCH_TICK_INTERVAL_MS);
+
+        let runtime = Arc::new(crate::wasm::WasmRuntime::with_options(pool_size, tick_ms)?);
+
+        let tools = runtime.load_tools(&wasm_config.tools_dir)?;
+        let count = tools.len();
+
+        for tool in tools {
+            registry.register(Arc::new(tool))?;
+        }
+
+        self._wasm_runtime = Some(runtime);
+        Ok(count)
     }
 
     /// Spawns a child agent via the supervisor.
