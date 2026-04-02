@@ -54,8 +54,8 @@ async fn wasm_infinite_loop_is_killed_by_epoch() {
     let elapsed = start.elapsed();
 
     assert!(
-        matches!(result, Err(ToolError::FuelExhausted)),
-        "expected FuelExhausted, got: {result:?}"
+        matches!(result, Err(ToolError::ResourceExhausted)),
+        "expected ResourceExhausted, got: {result:?}"
     );
     // 5 ticks * 100ms = 0.5s, with some tolerance
     assert!(elapsed.as_secs() < 3, "took too long: {elapsed:?}");
@@ -184,4 +184,65 @@ fn load_tools_broken_wasm_fails() {
 
     let result = runtime.load_tools(dir.path());
     assert!(result.is_err());
+}
+
+// --- Error mapping ---
+
+#[tokio::test]
+async fn wasm_bad_output_returns_execution_failed() {
+    let runtime = Arc::new(WasmRuntime::new().unwrap());
+    let tool = WasmTool::from_file(
+        make_spec("bad_output"),
+        &fixture_path("bad_output_tool.wasm"),
+        runtime,
+    )
+    .unwrap();
+
+    let result = tool.invoke(json!({})).await;
+    match result {
+        Err(ToolError::ExecutionFailed(msg)) => {
+            assert!(msg.contains("invalid output"), "unexpected message: {msg}");
+        }
+        other => panic!("expected ExecutionFailed, got: {other:?}"),
+    }
+}
+
+#[test]
+fn wasm_missing_invoke_export() {
+    let runtime = Arc::new(WasmRuntime::new().unwrap());
+    // Use the memory_hog tool but it does have invoke...
+    // Instead, create a minimal wasm with missing exports using wat
+    // For now, test that a broken module is caught at load time via load_tools
+    let dir = tempfile::tempdir().unwrap();
+    let tool_dir = dir.path().join("no-invoke");
+    std::fs::create_dir(&tool_dir).unwrap();
+    std::fs::write(
+        tool_dir.join("tool.toml"),
+        r#"
+            name = "no-invoke"
+            description = "Missing invoke"
+            version = "0.1.0"
+            wasm = "empty.wasm"
+        "#,
+    )
+    .unwrap();
+    // Minimal valid WASM module with no exports
+    // (module) in binary format
+    std::fs::write(
+        tool_dir.join("empty.wasm"),
+        b"\x00asm\x01\x00\x00\x00",
+    )
+    .unwrap();
+
+    // This should load OK (it's valid wasm), but invoking should fail
+    let tools = runtime.load_tools(dir.path()).unwrap();
+    assert_eq!(tools.len(), 1);
+
+    // Try to invoke — should get a missing export error
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let result = rt.block_on(tools[0].invoke(json!({})));
+    assert!(
+        matches!(result, Err(ToolError::ExecutionFailed(_)) | Err(ToolError::WasmTrap(_))),
+        "expected error for missing export, got: {result:?}"
+    );
 }

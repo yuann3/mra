@@ -1,5 +1,5 @@
 [workspace]
-exclude = ["tests/fixtures/echo_tool", "tests/fixtures/infinite_loop_tool", "tests/fixtures/memory_hog_tool"]
+exclude = ["tests/fixtures/echo_tool", "tests/fixtures/infinite_loop_tool", "tests/fixtures/memory_hog_tool", "tests/fixtures/bad_output_tool"]
 
 [package]
 name = "mra"

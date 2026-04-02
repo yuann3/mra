@@ -101,7 +101,7 @@ impl Tool for WasmTool {
 fn map_trap(e: anyhow::Error) -> ToolError {
     if let Some(trap) = e.downcast_ref::<wasmtime::Trap>() {
         if *trap == wasmtime::Trap::Interrupt {
-            return ToolError::FuelExhausted;
+            return ToolError::ResourceExhausted;
         }
     }
     ToolError::WasmTrap(e.to_string())
