@@ -12,7 +12,9 @@ use wasmtime_wasi::WasiCtxBuilder;
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolOutput, ToolSpec};
 
-use super::{DEFAULT_EPOCH_DEADLINE_TICKS, DEFAULT_MAX_MEMORY_BYTES, WasmRuntime};
+use super::{
+    DEFAULT_EPOCH_DEADLINE_TICKS, DEFAULT_MAX_MEMORY_BYTES, MAX_MEMORY_HARD_CAP, WasmRuntime,
+};
 
 struct StoreState {
     wasi: WasiP1Ctx,
@@ -54,8 +56,10 @@ impl WasmTool {
     }
 
     /// Sets the maximum memory in bytes for this tool.
+    ///
+    /// Values exceeding [`MAX_MEMORY_HARD_CAP`] (256 MiB) are clamped.
     pub fn with_max_memory(mut self, bytes: usize) -> Self {
-        self.max_memory_bytes = bytes;
+        self.max_memory_bytes = bytes.min(MAX_MEMORY_HARD_CAP);
         self
     }
 
@@ -149,15 +153,26 @@ fn invoke_in_store(
         .get_memory(&mut store, "memory")
         .ok_or_else(|| ToolError::WasmTrap("missing memory export".into()))?;
 
-    memory.data_mut(&mut store)[ptr as usize..ptr as usize + json_bytes.len()]
-        .copy_from_slice(json_bytes);
+    let write_end = (ptr as usize).checked_add(json_bytes.len()).ok_or_else(|| {
+        ToolError::WasmTrap("alloc returned pointer that overflows address space".into())
+    })?;
+    if write_end > memory.data_size(&store) {
+        return Err(ToolError::WasmTrap("alloc returned out-of-bounds pointer".into()));
+    }
+    memory.data_mut(&mut store)[ptr as usize..write_end].copy_from_slice(json_bytes);
 
     let result = invoke_fn.call(&mut store, (ptr, len)).map_err(map_trap)?;
 
     let result_ptr = (result >> 32) as u32 as usize;
     let result_len = (result & 0xFFFF_FFFF) as u32 as usize;
 
-    let result_bytes = memory.data(&store)[result_ptr..result_ptr + result_len].to_vec();
+    let read_end = result_ptr.checked_add(result_len).ok_or_else(|| {
+        ToolError::WasmTrap("invoke returned pointer that overflows address space".into())
+    })?;
+    if read_end > memory.data_size(&store) {
+        return Err(ToolError::WasmTrap("invoke returned out-of-bounds pointer".into()));
+    }
+    let result_bytes = memory.data(&store)[result_ptr..read_end].to_vec();
 
     serde_json::from_slice(&result_bytes)
         .map_err(|_| ToolError::ExecutionFailed("invalid output".into()))
