@@ -20,7 +20,7 @@ fn agent_error_classification() {
 #[test]
 fn tool_error_classification() {
     assert_eq!(
-        ToolError::FuelExhausted.classification(),
+        ToolError::ResourceExhausted.classification(),
         ErrorClass::Overload
     );
     assert_eq!(
@@ -84,7 +84,7 @@ fn mra_error_from_agent_error() {
 
 #[test]
 fn mra_error_from_tool_error() {
-    let tool_err = ToolError::FuelExhausted;
+    let tool_err = ToolError::ResourceExhausted;
     let mra_err: MraError = tool_err.into();
     assert!(matches!(mra_err, MraError::Tool(_)));
 }

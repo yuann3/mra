@@ -110,9 +110,9 @@ pub enum ToolError {
     /// The WASM module triggered a trap (e.g. unreachable, out-of-bounds).
     #[error("WASM trap: {0}")]
     WasmTrap(String),
-    /// The WASM module exhausted its fuel budget (likely an infinite loop).
-    #[error("WASM fuel exhausted")]
-    FuelExhausted,
+    /// The WASM module exhausted a resource limit (CPU time or memory).
+    #[error("WASM resource exhausted")]
+    ResourceExhausted,
     /// A native or WASM tool returned a runtime error.
     #[error("tool execution failed: {0}")]
     ExecutionFailed(String),
@@ -129,7 +129,7 @@ impl ToolError {
     pub fn classification(&self) -> ErrorClass {
         match self {
             Self::WasmTrap(_) => ErrorClass::Permanent,
-            Self::FuelExhausted => ErrorClass::Overload,
+            Self::ResourceExhausted => ErrorClass::Overload,
             Self::ExecutionFailed(_) => ErrorClass::Transient,
             Self::NotFound(_) => ErrorClass::Permanent,
             Self::InvalidArgs(_) => ErrorClass::Permanent,

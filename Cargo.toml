@@ -1,3 +1,6 @@
+[workspace]
+exclude = ["tests/fixtures/echo_tool", "tests/fixtures/infinite_loop_tool", "tests/fixtures/memory_hog_tool", "tests/fixtures/bad_output_tool"]
+
 [package]
 name = "mra"
 version = "0.1.0"
@@ -25,6 +28,14 @@ reqwest = { version = "0.12", features = ["json"] }
 figment = { version = "0.10", features = ["toml", "env"] }
 toml = "0.8"
 schemars = "1"
+wasmtime = { version = "43", optional = true }
+wasmtime-wasi = { version = "43", optional = true }
+rayon = { version = "1", optional = true }
+num_cpus = { version = "1", optional = true }
+
+[features]
+default = []
+wasm = ["wasmtime", "wasmtime-wasi", "rayon", "num_cpus"]
 
 [[bin]]
 name = "demo"

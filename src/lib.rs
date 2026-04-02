@@ -25,3 +25,5 @@ pub mod llm;
 pub mod runtime;
 pub mod supervisor;
 pub mod tool;
+#[cfg(feature = "wasm")]
+pub mod wasm;
