@@ -1,0 +1,9 @@
+name = "echo"
+description = "Echoes input back"
+version = "1.0.0"
+wasm = "echo_tool.wasm"
+
+[parameters]
+type = "object"
+properties = { text = { type = "string" } }
+required = ["text"]
