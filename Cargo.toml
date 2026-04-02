@@ -1,3 +1,6 @@
+[workspace]
+exclude = ["tests/fixtures/echo_tool", "tests/fixtures/infinite_loop_tool", "tests/fixtures/memory_hog_tool"]
+
 [package]
 name = "mra"
 version = "0.1.0"
