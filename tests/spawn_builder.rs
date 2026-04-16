@@ -153,6 +153,37 @@ async fn spawn_with_llm_and_budget() {
 }
 
 #[tokio::test]
+async fn spawn_without_llm_returns_typed_error() {
+    struct ChatBehavior;
+
+    impl AgentBehavior for ChatBehavior {
+        async fn handle(
+            &mut self,
+            ctx: &mut AgentCtx,
+            _input: Task,
+        ) -> Result<AgentReply, AgentError> {
+            let req = LlmRequest {
+                model: None,
+                messages: vec![],
+                temperature: None,
+                max_tokens: None,
+                tools: None,
+            };
+            let _ = ctx.chat(&req).await?;
+            unreachable!("chat without llm should fail")
+        }
+    }
+
+    let spawned = AgentSpawn::new("chat", ChatBehavior).spawn();
+    let result = spawned.handle.execute(Task::new("test")).await;
+
+    assert!(matches!(result, Err(AgentError::LlmNotConfigured)));
+
+    spawned.handle.cancel();
+    spawned.join.await.unwrap();
+}
+
+#[tokio::test]
 async fn spawn_child_works_under_supervisor() {
     let (sup, join) = SupervisorHandle::start(SupervisorConfig::default());
 

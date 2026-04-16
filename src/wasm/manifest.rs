@@ -3,6 +3,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::WasmError;
 use super::limits::{DEFAULT_EPOCH_DEADLINE_TICKS, DEFAULT_MAX_MEMORY_BYTES, MAX_MEMORY_HARD_CAP};
 
 /// Parsed contents of a `tool.toml` manifest file.
@@ -63,29 +64,34 @@ pub struct WasmToolConfig {
 
 impl WasmToolManifest {
     /// Parse and validate a manifest from TOML string content.
-    pub fn parse(toml_str: &str) -> Result<Self, anyhow::Error> {
+    pub fn parse(toml_str: &str) -> Result<Self, WasmError> {
         let manifest: Self = toml::from_str(toml_str)?;
         manifest.validate()?;
         Ok(manifest)
     }
 
     /// Validate the manifest fields and enforce hard caps.
-    fn validate(&self) -> Result<(), anyhow::Error> {
+    fn validate(&self) -> Result<(), WasmError> {
         if self.name.is_empty() {
-            anyhow::bail!("manifest: name must not be empty");
+            return Err(WasmError::InvalidManifest(
+                "manifest: name must not be empty".into(),
+            ));
         }
         if self.description.is_empty() {
-            anyhow::bail!("manifest: description must not be empty");
+            return Err(WasmError::InvalidManifest(
+                "manifest: description must not be empty".into(),
+            ));
         }
         if self.wasm.is_empty() {
-            anyhow::bail!("manifest: wasm path must not be empty");
+            return Err(WasmError::InvalidManifest(
+                "manifest: wasm path must not be empty".into(),
+            ));
         }
         if self.limits.max_memory_bytes > MAX_MEMORY_HARD_CAP {
-            anyhow::bail!(
+            return Err(WasmError::InvalidManifest(format!(
                 "manifest: max_memory_bytes ({}) exceeds hard cap ({})",
-                self.limits.max_memory_bytes,
-                MAX_MEMORY_HARD_CAP
-            );
+                self.limits.max_memory_bytes, MAX_MEMORY_HARD_CAP
+            )));
         }
         Ok(())
     }

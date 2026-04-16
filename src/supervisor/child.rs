@@ -113,10 +113,7 @@ impl SpawnedChild {
     /// and for supervisors that manage non-agent children.
     pub fn from_future(future: Pin<Box<dyn Future<Output = ChildExit> + Send>>) -> Self {
         let (tx, _rx) = mpsc::channel(1);
-        let (_ptx, prx) = watch::channel(crate::agent::ProgressState {
-            last_progress: tokio::time::Instant::now(),
-            busy: false,
-        });
+        let (_ptx, prx) = watch::channel(crate::agent::ProgressState::idle_now());
         Self {
             future,
             progress: prx,

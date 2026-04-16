@@ -17,6 +17,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use schemars::JsonSchema;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -33,6 +35,17 @@ pub struct ToolSpec {
     pub description: String,
     /// JSON Schema describing the expected arguments.
     pub parameters: Value,
+}
+
+impl ToolSpec {
+    pub(crate) fn from_schema<T: JsonSchema>(name: &str, description: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            description: description.to_owned(),
+            parameters: serde_json::to_value(schemars::schema_for!(T))
+                .expect("schemars-generated schema should always serialize"),
+        }
+    }
 }
 
 /// Result of a tool invocation, returned to the LLM as a `tool` message.
@@ -129,4 +142,8 @@ impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+pub(crate) fn parse_args<T: DeserializeOwned>(args: Value) -> Result<T, ToolError> {
+    serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs(e.to_string()))
 }

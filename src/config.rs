@@ -104,6 +104,16 @@ impl Default for RuntimeConfig {
     }
 }
 
+impl Default for RuntimeConfigFile {
+    fn default() -> Self {
+        let runtime = RuntimeConfig::default();
+        Self {
+            max_agents: runtime.max_agents,
+            shutdown_timeout_secs: runtime.shutdown_timeout.as_secs(),
+        }
+    }
+}
+
 /// WASM sandbox configuration.
 #[derive(Debug, Clone)]
 pub struct WasmConfig {
@@ -166,10 +176,16 @@ impl Default for MraConfigDefaults {
                 model: "openai/gpt-4o-mini".into(),
                 base_url: "https://openrouter.ai/api/v1".into(),
             },
-            runtime: RuntimeConfigFile {
-                max_agents: 100,
-                shutdown_timeout_secs: 30,
-            },
+            runtime: RuntimeConfigFile::default(),
+        }
+    }
+}
+
+impl From<RuntimeConfigFile> for RuntimeConfig {
+    fn from(value: RuntimeConfigFile) -> Self {
+        Self {
+            max_agents: value.max_agents,
+            shutdown_timeout: Duration::from_secs(value.shutdown_timeout_secs),
         }
     }
 }
@@ -200,9 +216,6 @@ impl MraConfig {
 
     /// Converts to the runtime's [`RuntimeConfig`].
     pub fn runtime_config(&self) -> RuntimeConfig {
-        RuntimeConfig {
-            max_agents: self.runtime.max_agents,
-            shutdown_timeout: Duration::from_secs(self.runtime.shutdown_timeout_secs),
-        }
+        self.runtime.clone().into()
     }
 }
