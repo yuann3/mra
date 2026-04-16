@@ -145,7 +145,7 @@ impl WasmRuntime {
             let manifest = WasmToolManifest::parse(&toml_str)?;
 
             let wasm_path = path.join(&manifest.wasm);
-            if !wasm_path.exists() {
+            if !wasm_path.is_file() {
                 return Err(WasmError::MissingBinary {
                     wasm_path,
                     manifest_path,
@@ -153,7 +153,7 @@ impl WasmRuntime {
             }
 
             let module = Module::from_file(&self.engine, &wasm_path)
-                .map_err(|e| WasmError::Compilation(e.to_string()))?;
+                .map_err(|e| WasmError::Compilation(format!("{}: {e}", wasm_path.display())))?;
 
             let parameters = manifest
                 .parameters

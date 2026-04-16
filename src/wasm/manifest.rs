@@ -72,17 +72,17 @@ impl WasmToolManifest {
 
     /// Validate the manifest fields and enforce hard caps.
     fn validate(&self) -> Result<(), WasmError> {
-        if self.name.is_empty() {
+        if self.name.trim().is_empty() {
             return Err(WasmError::InvalidManifest(
                 "manifest: name must not be empty".into(),
             ));
         }
-        if self.description.is_empty() {
+        if self.description.trim().is_empty() {
             return Err(WasmError::InvalidManifest(
                 "manifest: description must not be empty".into(),
             ));
         }
-        if self.wasm.is_empty() {
+        if self.wasm.trim().is_empty() {
             return Err(WasmError::InvalidManifest(
                 "manifest: wasm path must not be empty".into(),
             ));

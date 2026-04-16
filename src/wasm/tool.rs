@@ -53,7 +53,7 @@ impl WasmTool {
         runtime: Arc<WasmRuntime>,
     ) -> Result<Self, WasmError> {
         let module = Module::from_file(runtime.engine(), path)
-            .map_err(|e| WasmError::Compilation(e.to_string()))?;
+            .map_err(|e| WasmError::Compilation(format!("{}: {e}", path.display())))?;
         Ok(Self::new(spec, module, runtime))
     }
 
