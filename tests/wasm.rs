@@ -7,6 +7,7 @@ use serde_json::json;
 use mra::error::ToolError;
 use mra::tool::Tool;
 use mra::tool::ToolSpec;
+use mra::wasm::WasmError;
 use mra::wasm::WasmRuntime;
 use mra::wasm::WasmTool;
 
@@ -135,6 +136,24 @@ fn manifest_rejects_memory_over_hard_cap() {
     );
 }
 
+#[test]
+fn manifest_rejects_whitespace_only_required_fields() {
+    use mra::wasm::WasmToolManifest;
+
+    let toml = r#"
+        name = "   "
+        description = "  "
+        version = "0.1.0"
+        wasm = "   "
+    "#;
+
+    let error = WasmToolManifest::parse(toml).unwrap_err().to_string();
+    assert!(
+        error.contains("name must not be empty"),
+        "unexpected error: {error}"
+    );
+}
+
 // --- Tool discovery ---
 
 #[tokio::test]
@@ -189,6 +208,49 @@ fn load_tools_broken_wasm_fails() {
 
     let result = runtime.load_tools(dir.path());
     assert!(result.is_err());
+}
+
+#[test]
+fn load_tools_directory_instead_of_wasm_reports_missing_binary() {
+    let runtime = Arc::new(WasmRuntime::new().unwrap());
+    let dir = tempfile::tempdir().unwrap();
+    let tool_dir = dir.path().join("broken");
+    let wasm_dir = tool_dir.join("broken.wasm");
+    std::fs::create_dir_all(&wasm_dir).unwrap();
+    std::fs::write(
+        tool_dir.join("tool.toml"),
+        r#"
+            name = "broken"
+            description = "Broken tool"
+            version = "0.1.0"
+            wasm = "broken.wasm"
+        "#,
+    )
+    .unwrap();
+
+    let result = runtime.load_tools(dir.path());
+    assert!(matches!(result, Err(WasmError::MissingBinary { .. })));
+}
+
+#[test]
+fn wasm_from_file_includes_path_in_compilation_error() {
+    let runtime = Arc::new(WasmRuntime::new().unwrap());
+    let dir = tempfile::tempdir().unwrap();
+    let wasm_path = dir.path().join("broken.wasm");
+    std::fs::write(&wasm_path, b"not a valid wasm").unwrap();
+
+    let result = WasmTool::from_file(make_spec("broken"), &wasm_path, runtime);
+
+    match result {
+        Err(WasmError::Compilation(message)) => {
+            assert!(
+                message.contains("broken.wasm"),
+                "expected path in error, got: {message}"
+            );
+        }
+        Ok(_) => panic!("expected Compilation error, got success"),
+        Err(other) => panic!("expected Compilation error, got: {other}"),
+    }
 }
 
 // --- SwarmRuntime integration ---

@@ -109,7 +109,7 @@ impl AgentCtx {
             return Err(AgentError::BudgetExceeded);
         }
 
-        let llm = self.llm.as_ref().expect("no llm configured");
+        let llm = self.llm.as_ref().ok_or(AgentError::LlmNotConfigured)?;
         let chat_fut = llm.chat(request);
         tokio::pin!(chat_fut);
         let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(1));

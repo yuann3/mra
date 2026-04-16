@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::error::ToolError;
 
-use super::{Tool, ToolOutput, ToolSpec};
+use super::{Tool, ToolOutput, ToolSpec, parse_args};
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -61,13 +61,8 @@ impl ShellTool {
 
     /// Creates a `ShellTool` with a custom timeout.
     pub fn with_timeout(timeout: Duration) -> Self {
-        let schema = schemars::schema_for!(ShellArgs);
         Self {
-            spec: ToolSpec {
-                name: "shell".into(),
-                description: "Run a shell command".into(),
-                parameters: serde_json::to_value(schema).unwrap(),
-            },
+            spec: ToolSpec::from_schema::<ShellArgs>("shell", "Run a shell command"),
             timeout,
         }
     }
@@ -83,8 +78,7 @@ impl Tool for ShellTool {
         args: Value,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + '_>> {
         Box::pin(async move {
-            let parsed: ShellArgs =
-                serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+            let parsed: ShellArgs = parse_args(args)?;
 
             let result = tokio::time::timeout(self.timeout, async {
                 let child = tokio::process::Command::new("/bin/sh")

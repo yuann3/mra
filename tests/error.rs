@@ -8,6 +8,10 @@ fn agent_error_classification() {
         ErrorClass::Cancelled
     );
     assert_eq!(
+        AgentError::LlmNotConfigured.classification(),
+        ErrorClass::Permanent
+    );
+    assert_eq!(
         AgentError::BudgetExceeded.classification(),
         ErrorClass::BudgetExceeded
     );

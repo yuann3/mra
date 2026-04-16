@@ -42,12 +42,6 @@ impl AgentHandle {
         self.id
     }
 
-    /// Returns a reference to the shared [`MailboxSlot`] for supervisor access.
-    #[allow(dead_code)]
-    pub(crate) fn mailbox(&self) -> &Arc<MailboxSlot> {
-        &self.mailbox
-    }
-
     /// Sends a [`Task`] to the agent and awaits the reply.
     ///
     /// Returns [`AgentError::Unavailable`] if the agent's channel is closed

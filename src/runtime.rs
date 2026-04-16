@@ -78,7 +78,7 @@ impl SwarmRuntime {
         &mut self,
         wasm_config: &crate::config::WasmConfig,
         registry: &mut crate::tool::ToolRegistry,
-    ) -> Result<usize, anyhow::Error> {
+    ) -> Result<usize, crate::wasm::WasmError> {
         let pool_size = wasm_config.thread_pool_size.unwrap_or_else(num_cpus::get);
         let tick_ms = wasm_config
             .epoch_tick_ms
@@ -114,15 +114,14 @@ impl SwarmRuntime {
 
     /// Returns current global token usage, if a budget is configured.
     pub fn token_usage(&self) -> Option<RunUsage> {
-        self.budget.clone().map(|b| b.run_usage())
+        self.budget.as_ref().map(|budget| budget.run_usage())
     }
 
     /// Returns per-agent token usage, if a budget is configured.
     pub fn agent_token_usage(&self, name: &str) -> Option<AgentUsage> {
-        match self.budget.clone() {
-            Some(b) => b.agent_usage(name),
-            None => None,
-        }
+        self.budget
+            .as_ref()
+            .and_then(|budget| budget.agent_usage(name))
     }
 
     /// Gracefully shuts down all agents and the supervisor.

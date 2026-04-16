@@ -19,9 +19,42 @@ use std::thread;
 use std::time::Duration;
 
 use serde_json::json;
+use thiserror::Error;
 use wasmtime::{Engine, Module};
 
+use crate::error::ToolError;
 use crate::tool::ToolSpec;
+
+/// Errors while initializing the WASM runtime or discovering WASM tools.
+#[derive(Debug, Error)]
+pub enum WasmError {
+    /// Failed to initialize the Wasmtime engine or worker pool.
+    #[error("failed to initialize wasm runtime: {0}")]
+    Initialization(String),
+    /// Failed to access the filesystem while scanning for tools.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    /// Failed to parse the tool manifest TOML.
+    #[error("invalid wasm manifest: {0}")]
+    ManifestParse(#[from] toml::de::Error),
+    /// The manifest failed semantic validation.
+    #[error("invalid wasm manifest: {0}")]
+    InvalidManifest(String),
+    /// The manifest points to a missing `.wasm` binary.
+    #[error("WASM binary not found: {wasm_path} (referenced by {manifest_path})")]
+    MissingBinary {
+        /// Path to the missing `.wasm` binary.
+        wasm_path: std::path::PathBuf,
+        /// Path to the manifest that referenced it.
+        manifest_path: std::path::PathBuf,
+    },
+    /// Failed to compile a `.wasm` module.
+    #[error("failed to compile wasm module: {0}")]
+    Compilation(String),
+    /// Failed to register a discovered tool in the runtime registry.
+    #[error(transparent)]
+    Registry(#[from] ToolError),
+}
 
 /// Owns the Wasmtime engine and dedicated thread pool for WASM execution.
 ///
@@ -39,24 +72,22 @@ impl WasmRuntime {
     /// Creates a new WASM runtime with default settings.
     ///
     /// Enables epoch interruption on the engine and spawns the ticker thread.
-    pub fn new() -> Result<Self, anyhow::Error> {
+    pub fn new() -> Result<Self, WasmError> {
         Self::with_options(num_cpus::get(), EPOCH_TICK_INTERVAL_MS)
     }
 
     /// Creates a new WASM runtime with custom thread pool size and tick interval.
-    pub fn with_options(
-        thread_pool_size: usize,
-        epoch_tick_ms: u64,
-    ) -> Result<Self, anyhow::Error> {
+    pub fn with_options(thread_pool_size: usize, epoch_tick_ms: u64) -> Result<Self, WasmError> {
         let mut config = wasmtime::Config::new();
         config.cranelift_opt_level(wasmtime::OptLevel::Speed);
         config.epoch_interruption(true);
 
-        let engine = Engine::new(&config)?;
+        let engine = Engine::new(&config).map_err(|e| WasmError::Initialization(e.to_string()))?;
 
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(thread_pool_size)
-            .build()?;
+            .build()
+            .map_err(|e| WasmError::Initialization(e.to_string()))?;
 
         let ticker_stop = Arc::new(AtomicBool::new(false));
         let ticker_engine = engine.clone();
@@ -90,7 +121,7 @@ impl WasmRuntime {
     ///
     /// Each subdirectory must contain a `tool.toml` manifest and the `.wasm`
     /// binary it references. Modules are eagerly compiled at load time.
-    pub fn load_tools(self: &Arc<Self>, dir: &Path) -> Result<Vec<WasmTool>, anyhow::Error> {
+    pub fn load_tools(self: &Arc<Self>, dir: &Path) -> Result<Vec<WasmTool>, WasmError> {
         let mut tools = Vec::new();
 
         if !dir.exists() {
@@ -114,15 +145,15 @@ impl WasmRuntime {
             let manifest = WasmToolManifest::parse(&toml_str)?;
 
             let wasm_path = path.join(&manifest.wasm);
-            if !wasm_path.exists() {
-                anyhow::bail!(
-                    "WASM binary not found: {} (referenced by {})",
-                    wasm_path.display(),
-                    manifest_path.display()
-                );
+            if !wasm_path.is_file() {
+                return Err(WasmError::MissingBinary {
+                    wasm_path,
+                    manifest_path,
+                });
             }
 
-            let module = Module::from_file(&self.engine, &wasm_path)?;
+            let module = Module::from_file(&self.engine, &wasm_path)
+                .map_err(|e| WasmError::Compilation(format!("{}: {e}", wasm_path.display())))?;
 
             let parameters = manifest
                 .parameters

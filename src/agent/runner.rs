@@ -37,6 +37,15 @@ pub struct ProgressState {
     pub busy: bool,
 }
 
+impl ProgressState {
+    pub(crate) fn idle_now() -> Self {
+        Self {
+            last_progress: tokio::time::Instant::now(),
+            busy: false,
+        }
+    }
+}
+
 /// Returned by [`crate::agent::AgentSpawn::spawn`]. Bundles everything needed to
 /// interact with and monitor a running agent.
 pub struct SpawnedAgent {
@@ -53,6 +62,52 @@ struct AgentRunner<B: AgentBehavior> {
     behavior: B,
     ctx: AgentCtx,
     cancel: CancellationToken,
+}
+
+struct PreparedAgent<B: AgentBehavior> {
+    sender: mpsc::Sender<AgentMessage>,
+    mailbox: Arc<MailboxSlot>,
+    progress: watch::Receiver<ProgressState>,
+    runner: AgentRunner<B>,
+}
+
+struct AgentInit<B: AgentBehavior> {
+    id: AgentId,
+    config: AgentConfig,
+    behavior: B,
+    peers: HashMap<String, AgentHandle>,
+    llm: Option<Arc<dyn LlmProvider>>,
+    cancel: CancellationToken,
+    budget: Option<Arc<BudgetTracker>>,
+    tools: ToolRegistry,
+}
+
+fn prepare_agent<B: AgentBehavior>(init: AgentInit<B>) -> PreparedAgent<B> {
+    let (sender, receiver) = mpsc::channel(init.config.mailbox_size);
+    let mailbox = Arc::new(MailboxSlot::new(sender.clone()));
+    let (progress_tx, progress_rx) = watch::channel(ProgressState::idle_now());
+
+    let ctx = AgentCtx {
+        id: init.id,
+        name: init.config.name,
+        peers: init.peers,
+        llm: init.llm,
+        budget: init.budget,
+        progress_tx,
+        tools: init.tools,
+    };
+
+    PreparedAgent {
+        sender,
+        mailbox,
+        progress: progress_rx,
+        runner: AgentRunner {
+            receiver,
+            behavior: init.behavior,
+            ctx,
+            cancel: init.cancel,
+        },
+    }
 }
 
 impl<B: AgentBehavior> AgentRunner<B> {
@@ -161,37 +216,22 @@ impl AgentHandle {
         budget: Option<Arc<BudgetTracker>>,
         tools: ToolRegistry,
     ) -> SpawnedAgent {
-        let (tx, rx) = mpsc::channel(config.mailbox_size);
-        let mailbox = Arc::new(MailboxSlot::new(tx));
-        let (progress_tx, progress_rx) = watch::channel(ProgressState {
-            last_progress: tokio::time::Instant::now(),
-            busy: false,
-        });
-
-        let handle = AgentHandle::new(id, mailbox, cancel.clone());
-
-        let ctx = AgentCtx {
+        let prepared = prepare_agent(AgentInit {
             id,
-            name: config.name.clone(),
+            config,
+            behavior,
             peers,
             llm,
+            cancel: cancel.clone(),
             budget,
-            progress_tx,
             tools,
-        };
-
-        let runner = AgentRunner {
-            receiver: rx,
-            behavior,
-            ctx,
-            cancel,
-        };
-
-        let join = tokio::spawn(runner.run());
+        });
+        let handle = AgentHandle::new(id, prepared.mailbox, cancel);
+        let join = tokio::spawn(prepared.runner.run());
 
         SpawnedAgent {
             handle,
-            progress: progress_rx,
+            progress: prepared.progress,
             join,
         }
     }
@@ -219,33 +259,21 @@ impl AgentHandle {
         budget: Option<Arc<BudgetTracker>>,
         tools: ToolRegistry,
     ) -> SpawnedChild {
-        let (tx, rx) = mpsc::channel(config.mailbox_size);
-        let (progress_tx, progress_rx) = watch::channel(ProgressState {
-            last_progress: tokio::time::Instant::now(),
-            busy: false,
-        });
-
-        let ctx = AgentCtx {
+        let prepared = prepare_agent(AgentInit {
             id,
-            name: config.name.clone(),
+            config,
+            behavior,
             peers,
             llm,
-            budget,
-            progress_tx,
-            tools,
-        };
-
-        let runner = AgentRunner {
-            receiver: rx,
-            behavior,
-            ctx,
             cancel,
-        };
+            budget,
+            tools,
+        });
 
         SpawnedChild {
-            future: Box::pin(runner.run()),
-            progress: progress_rx,
-            sender: tx,
+            future: Box::pin(prepared.runner.run()),
+            progress: prepared.progress,
+            sender: prepared.sender,
         }
     }
 }

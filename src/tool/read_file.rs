@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::error::ToolError;
 
-use super::{Tool, ToolOutput, ToolSpec};
+use super::{Tool, ToolOutput, ToolSpec, parse_args};
 
 const MAX_OUTPUT_BYTES: usize = 65_536;
 
@@ -53,13 +53,11 @@ impl Default for ReadFileTool {
 impl ReadFileTool {
     /// Creates a new `ReadFileTool`.
     pub fn new() -> Self {
-        let schema = schemars::schema_for!(ReadFileArgs);
         Self {
-            spec: ToolSpec {
-                name: "read_file".into(),
-                description: "Read a file and return its contents".into(),
-                parameters: serde_json::to_value(schema).unwrap(),
-            },
+            spec: ToolSpec::from_schema::<ReadFileArgs>(
+                "read_file",
+                "Read a file and return its contents",
+            ),
         }
     }
 }
@@ -74,8 +72,7 @@ impl Tool for ReadFileTool {
         args: Value,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + '_>> {
         Box::pin(async move {
-            let parsed: ReadFileArgs =
-                serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+            let parsed: ReadFileArgs = parse_args(args)?;
 
             match tokio::fs::read_to_string(&parsed.path).await {
                 Ok(content) => Ok(ToolOutput {

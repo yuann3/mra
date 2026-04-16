@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::error::ToolError;
 
-use super::{Tool, ToolOutput, ToolSpec};
+use super::{Tool, ToolOutput, ToolSpec, parse_args};
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -50,13 +50,11 @@ impl Default for EditFileTool {
 impl EditFileTool {
     /// Creates a new `EditFileTool` with an auto-generated JSON Schema.
     pub fn new() -> Self {
-        let schema = schemars::schema_for!(EditFileArgs);
         Self {
-            spec: ToolSpec {
-                name: "edit_file".into(),
-                description: "Edit a file by replacing an exact text match with new text".into(),
-                parameters: serde_json::to_value(schema).unwrap(),
-            },
+            spec: ToolSpec::from_schema::<EditFileArgs>(
+                "edit_file",
+                "Edit a file by replacing an exact text match with new text",
+            ),
         }
     }
 }
@@ -71,8 +69,7 @@ impl Tool for EditFileTool {
         args: Value,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + '_>> {
         Box::pin(async move {
-            let parsed: EditFileArgs =
-                serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+            let parsed: EditFileArgs = parse_args(args)?;
 
             if parsed.old_text.is_empty() {
                 return Ok(ToolOutput {

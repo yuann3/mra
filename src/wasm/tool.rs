@@ -13,7 +13,8 @@ use crate::error::ToolError;
 use crate::tool::{Tool, ToolOutput, ToolSpec};
 
 use super::{
-    DEFAULT_EPOCH_DEADLINE_TICKS, DEFAULT_MAX_MEMORY_BYTES, MAX_MEMORY_HARD_CAP, WasmRuntime,
+    DEFAULT_EPOCH_DEADLINE_TICKS, DEFAULT_MAX_MEMORY_BYTES, MAX_MEMORY_HARD_CAP, WasmError,
+    WasmRuntime,
 };
 
 struct StoreState {
@@ -50,8 +51,9 @@ impl WasmTool {
         spec: ToolSpec,
         path: &std::path::Path,
         runtime: Arc<WasmRuntime>,
-    ) -> Result<Self, anyhow::Error> {
-        let module = Module::from_file(runtime.engine(), path)?;
+    ) -> Result<Self, WasmError> {
+        let module = Module::from_file(runtime.engine(), path)
+            .map_err(|e| WasmError::Compilation(format!("{}: {e}", path.display())))?;
         Ok(Self::new(spec, module, runtime))
     }
 
