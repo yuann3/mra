@@ -17,6 +17,19 @@ pub use config::{
 pub use event::SupervisorEvent;
 pub use handle::SupervisorHandle;
 
+/// Point-in-time snapshot of a supervised child's status.
+#[derive(Debug, Clone)]
+pub struct ChildStatus {
+    /// Human-readable name of the child.
+    pub name: String,
+    /// Whether the child is currently running.
+    pub alive: bool,
+    /// Current generation (0 = first start, incremented on each restart).
+    pub generation: u64,
+    /// Total number of restarts recorded for this child.
+    pub restart_count: u64,
+}
+
 /// Why a child agent exited.
 #[derive(Debug, Clone)]
 pub enum ChildExit {

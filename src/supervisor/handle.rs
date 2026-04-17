@@ -13,6 +13,7 @@ use crate::agent::AgentHandle;
 use crate::budget::BudgetTracker;
 use crate::error::SupervisorError;
 
+use super::ChildStatus;
 use super::child::ChildSpec;
 use super::config::SupervisorConfig;
 use super::event::SupervisorEvent;
@@ -30,6 +31,13 @@ pub(crate) enum SupervisorCommand {
     GetChild {
         name: String,
         reply: oneshot::Sender<Option<AgentHandle>>,
+    },
+    ListChildren {
+        reply: oneshot::Sender<Vec<ChildStatus>>,
+    },
+    GetChildStatus {
+        name: String,
+        reply: oneshot::Sender<Option<ChildStatus>>,
     },
     Shutdown,
 }
@@ -109,6 +117,33 @@ impl SupervisorHandle {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(SupervisorCommand::GetChild {
+                name: name.into(),
+                reply: tx,
+            })
+            .await
+            .ok()?;
+        rx.await.ok()?
+    }
+
+    /// Returns a snapshot of all children's status.
+    pub async fn list_children(&self) -> Vec<ChildStatus> {
+        let (tx, rx) = oneshot::channel();
+        if self
+            .command_tx
+            .send(SupervisorCommand::ListChildren { reply: tx })
+            .await
+            .is_err()
+        {
+            return Vec::new();
+        }
+        rx.await.unwrap_or_default()
+    }
+
+    /// Returns a snapshot of a single child's status, or `None` if not found.
+    pub async fn child_status(&self, name: &str) -> Option<ChildStatus> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(SupervisorCommand::GetChildStatus {
                 name: name.into(),
                 reply: tx,
             })

@@ -166,6 +166,14 @@ impl RestartManager {
         self.intensity.total_restarts
     }
 
+    /// Returns the total restart count for a child.
+    pub(crate) fn child_restart_count(&self, name: &str) -> u64 {
+        self.children
+            .get(name)
+            .map(|c| c.tracker.total_restarts)
+            .unwrap_or(0)
+    }
+
     /// Returns current backoff delay for a child (useful for diagnostics).
     pub(crate) fn backoff_delay(&self, name: &str) -> Duration {
         self.children

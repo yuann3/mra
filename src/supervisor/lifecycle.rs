@@ -142,7 +142,7 @@ impl ChildLifecycle {
         mailbox.swap(spawned.sender);
 
         // Build stable handle
-        let handle = AgentHandle::new(id, mailbox.clone(), logical_cancel.clone());
+        let handle = AgentHandle::new(name.clone(), id, mailbox.clone(), logical_cancel.clone());
 
         // Spawn future in JoinSet
         let abort = self.join_set.spawn(spawned.future);
@@ -303,6 +303,7 @@ impl ChildLifecycle {
     pub fn get_handle(&self, name: &str) -> Option<AgentHandle> {
         self.children.get(name).map(|child| {
             AgentHandle::new(
+                name.to_string(),
                 child.id,
                 child.mailbox.clone(),
                 child.logical_cancel.clone(),
@@ -318,7 +319,7 @@ impl ChildLifecycle {
             .map(|(n, c)| {
                 (
                     n.clone(),
-                    AgentHandle::new(c.id, c.mailbox.clone(), c.logical_cancel.clone()),
+                    AgentHandle::new(n.clone(), c.id, c.mailbox.clone(), c.logical_cancel.clone()),
                 )
             })
             .collect()
@@ -357,6 +358,11 @@ impl ChildLifecycle {
     /// Returns reference to child record.
     pub fn get(&self, name: &str) -> Option<&ChildRecord> {
         self.children.get(name)
+    }
+
+    /// Returns an iterator over (name, record) pairs for all tracked children.
+    pub fn children(&self) -> impl Iterator<Item = (&str, &ChildRecord)> {
+        self.children.iter().map(|(n, r)| (n.as_str(), r))
     }
 
     /// Returns a reference to the shared budget tracker, if configured.

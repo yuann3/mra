@@ -8,7 +8,9 @@ use tokio::task::JoinHandle;
 use crate::agent::AgentHandle;
 use crate::budget::{AgentUsage, BudgetTracker, RunUsage};
 use crate::error::SupervisorError;
-use crate::supervisor::{ChildSpec, SupervisorConfig, SupervisorEvent, SupervisorHandle};
+use crate::supervisor::{
+    ChildSpec, ChildStatus, SupervisorConfig, SupervisorEvent, SupervisorHandle,
+};
 
 /// Manages a supervised set of agents.
 ///
@@ -77,7 +79,7 @@ impl SwarmRuntime {
     pub fn load_wasm_tools(
         &mut self,
         wasm_config: &crate::config::WasmConfig,
-        registry: &mut crate::tool::ToolRegistry,
+        registry: &crate::tool::ToolRegistry,
     ) -> Result<usize, crate::wasm::WasmError> {
         let pool_size = wasm_config.thread_pool_size.unwrap_or_else(num_cpus::get);
         let tick_ms = wasm_config
@@ -105,6 +107,11 @@ impl SwarmRuntime {
     /// Looks up a child handle by name.
     pub async fn get_handle_by_name(&self, name: &str) -> Option<AgentHandle> {
         self.supervisor.child(name).await
+    }
+
+    /// Returns status snapshots of all supervised children.
+    pub async fn list_children(&self) -> Vec<ChildStatus> {
+        self.supervisor.list_children().await
     }
 
     /// Subscribes to supervisor events.

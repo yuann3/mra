@@ -5,6 +5,7 @@
 //! across agent generations.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -23,18 +24,30 @@ use super::message::{AgentMessage, AgentReply, Task};
 /// block the OS thread) when the inbox is full.
 #[derive(Clone)]
 pub struct AgentHandle {
+    name: String,
     id: AgentId,
     mailbox: Arc<MailboxSlot>,
     cancel: CancellationToken,
 }
 
 impl AgentHandle {
-    pub(crate) fn new(id: AgentId, mailbox: Arc<MailboxSlot>, cancel: CancellationToken) -> Self {
+    pub(crate) fn new(
+        name: String,
+        id: AgentId,
+        mailbox: Arc<MailboxSlot>,
+        cancel: CancellationToken,
+    ) -> Self {
         Self {
+            name,
             id,
             mailbox,
             cancel,
         }
+    }
+
+    /// Returns this agent's human-readable name.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Returns this agent's unique identifier.
@@ -57,6 +70,19 @@ impl AgentHandle {
             .await?;
 
         rx.await.map_err(|_| AgentError::Cancelled)?
+    }
+
+    /// Sends a [`Task`] to the agent and awaits the reply, failing with
+    /// [`AgentError::Timeout`] if the agent does not respond within `timeout`.
+    pub async fn execute_with_timeout(
+        &self,
+        task: Task,
+        timeout: Duration,
+    ) -> Result<AgentReply, AgentError> {
+        match tokio::time::timeout(timeout, self.execute(task)).await {
+            Ok(result) => result,
+            Err(_) => Err(AgentError::Timeout),
+        }
     }
 
     /// Requests graceful shutdown. The agent closes its receiver, drains
