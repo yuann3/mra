@@ -141,7 +141,12 @@ impl<B: AgentBehavior> AgentRunner<B> {
                             e.classification() == ErrorClass::BudgetExceeded
                         });
 
-                        let _ = respond_to.send(result);
+                        if respond_to.send(result).is_err() {
+                            tracing::debug!(
+                                agent = %self.ctx.name,
+                                "task response dropped: caller's receiver was closed"
+                            );
+                        }
 
                         if is_budget {
                             return ChildExit::BudgetExceeded;
@@ -182,7 +187,12 @@ impl<B: AgentBehavior> AgentRunner<B> {
                             busy: false,
                         });
 
-                        let _ = respond_to.send(result);
+                        if respond_to.send(result).is_err() {
+                            tracing::debug!(
+                                agent = %self.ctx.name,
+                                "drain response dropped: caller's receiver was closed"
+                            );
+                        }
                     }
                     Some(AgentMessage::Shutdown { .. }) => {}
                 },
@@ -192,8 +202,13 @@ impl<B: AgentBehavior> AgentRunner<B> {
 
     fn fail_remaining(&mut self) {
         while let Ok(msg) = self.receiver.try_recv() {
-            if let AgentMessage::Execute { respond_to, .. } = msg {
-                let _ = respond_to.send(Err(AgentError::Cancelled));
+            if let AgentMessage::Execute { respond_to, .. } = msg
+                && respond_to.send(Err(AgentError::Cancelled)).is_err()
+            {
+                tracing::debug!(
+                    agent = %self.ctx.name,
+                    "fail_remaining response dropped: caller's receiver was closed"
+                );
             }
         }
     }

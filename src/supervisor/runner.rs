@@ -122,7 +122,9 @@ impl SupervisorRunner {
     }
 
     fn emit(&self, event: SupervisorEvent) {
-        let _ = self.event_tx.send(event);
+        if self.event_tx.send(event).is_err() {
+            tracing::debug!("supervisor event dropped: no active subscribers");
+        }
     }
 
     fn lifecycle_budget(&self) -> Option<&std::sync::Arc<crate::budget::BudgetTracker>> {
@@ -300,8 +302,11 @@ impl SupervisorRunner {
             // Restart via lifecycle
             let new_gen = match self.lifecycle.restart(child_name, spec, &peers).await {
                 Ok(generation) => generation,
-                Err(_) => {
-                    // Factory failed — skip this child
+                Err(e) => {
+                    self.emit(SupervisorEvent::ChildSpawnFailed {
+                        name: child_name.clone(),
+                        error: e.to_string(),
+                    });
                     continue;
                 }
             };
@@ -354,8 +359,11 @@ impl SupervisorRunner {
         // Restart via lifecycle
         let new_gen = match self.lifecycle.restart(name, spec, &peers).await {
             Ok(generation) => generation,
-            Err(_) => {
-                // Factory failed — leave child dead
+            Err(e) => {
+                self.emit(SupervisorEvent::ChildSpawnFailed {
+                    name: name.to_string(),
+                    error: e.to_string(),
+                });
                 return Ok(());
             }
         };

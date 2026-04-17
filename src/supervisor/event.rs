@@ -65,7 +65,14 @@ pub enum SupervisorEvent {
         /// Total restarts across all children.
         total_restarts: u64,
     },
-    /// A token budget was exceeded (reserved for future event-emitter wiring).
+    /// A child's factory closure failed during restart, leaving the child dead.
+    ChildSpawnFailed {
+        /// Child name.
+        name: String,
+        /// Error message from the factory.
+        error: String,
+    },
+    /// A token budget was exceeded.
     BudgetExceeded {
         /// Agent name that exceeded the budget.
         name: String,

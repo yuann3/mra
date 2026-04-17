@@ -655,6 +655,80 @@ async fn test_budget_exceeded_sibling_continues() {
     let _ = join.await;
 }
 
+// --- Factory failure observability tests ---
+
+#[tokio::test]
+async fn test_factory_failure_emits_child_spawn_failed_event() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let start_count = Arc::new(AtomicU32::new(0));
+    let count = start_count.clone();
+
+    // Factory that succeeds on gen 0, fails on gen 1 (restart)
+    let spec = ChildSpec::new(
+        "flaky",
+        AgentConfig::new("flaky").with_restart_policy(mra::config::RestartPolicy {
+            max_restarts: 5,
+            window: Duration::from_secs(60),
+            backoff_base: Duration::from_millis(10),
+            backoff_max: Duration::from_millis(100),
+        }),
+        Arc::new(move |_ctx: ChildContext| {
+            let count = count.clone();
+            Box::pin(async move {
+                let attempt = count.fetch_add(1, Ordering::SeqCst);
+                if attempt == 0 {
+                    // First start: crash immediately to trigger restart
+                    Ok(SpawnedChild::from_future(Box::pin(async {
+                        ChildExit::Failed("initial crash".into())
+                    })))
+                } else {
+                    // Restart factory fails
+                    Err(mra::error::SupervisorError::SpawnFailed(
+                        "factory broken".into(),
+                    ))
+                }
+            })
+                as Pin<
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
+                >
+        }),
+    )
+    .with_restart(ChildRestart::Permanent);
+
+    let (handle, join) = SupervisorHandle::start(SupervisorConfig::default());
+    let mut events = handle.subscribe();
+
+    // Drain SupervisorStarted
+    let _ = tokio::time::timeout(Duration::from_secs(1), events.recv()).await;
+
+    handle.start_child(spec).await.unwrap();
+
+    // Wait for crash + failed restart attempt
+    let mut found_spawn_failed = false;
+    for _ in 0..30 {
+        match tokio::time::timeout(Duration::from_millis(200), events.recv()).await {
+            Ok(Ok(SupervisorEvent::ChildSpawnFailed { name, .. })) if name == "flaky" => {
+                found_spawn_failed = true;
+                break;
+            }
+            Ok(Ok(_)) => continue,
+            _ => break,
+        }
+    }
+
+    assert!(
+        found_spawn_failed,
+        "should emit ChildSpawnFailed when factory fails on restart"
+    );
+
+    handle.shutdown().await;
+    let _ = join.await;
+}
+
 // --- Global budget monitoring tests ---
 
 #[tokio::test]

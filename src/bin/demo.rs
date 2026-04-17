@@ -275,6 +275,9 @@ async fn main() -> anyhow::Result<()> {
                         "  [ERR] Global restart intensity exceeded ({total_restarts} restarts)"
                     );
                 }
+                SupervisorEvent::ChildSpawnFailed { name, error } => {
+                    println!("  [ERR] Agent '{name}' spawn failed: {error}");
+                }
                 SupervisorEvent::BudgetExceeded { name, used, limit } => {
                     println!("  [$] Budget exceeded: '{name}' ({used}/{limit} tokens)");
                 }
