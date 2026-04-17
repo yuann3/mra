@@ -9,7 +9,7 @@
 
 mod openrouter;
 
-pub use openrouter::OpenRouterClient;
+pub use openrouter::{OpenRouterClient, OpenRouterClientBuilder, OpenRouterClientBuilderInit};
 
 use std::future::Future;
 use std::pin::Pin;
@@ -75,6 +75,80 @@ pub struct LlmRequest {
     pub max_tokens: Option<u32>,
     /// Tool definitions available for this call (`None` = no tools).
     pub tools: Option<Vec<ToolSpec>>,
+}
+
+impl LlmRequest {
+    /// Returns a builder for constructing an [`LlmRequest`].
+    pub fn builder() -> LlmRequestBuilder {
+        LlmRequestBuilder {
+            messages: Vec::new(),
+            model: None,
+            temperature: None,
+            max_tokens: None,
+            tools: None,
+        }
+    }
+}
+
+/// Builder for [`LlmRequest`] with sensible defaults.
+///
+/// All fields except `messages` default to `None`.
+#[derive(Debug)]
+pub struct LlmRequestBuilder {
+    messages: Vec<ChatMessage>,
+    model: Option<String>,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+    tools: Option<Vec<ToolSpec>>,
+}
+
+impl LlmRequestBuilder {
+    /// Sets the full list of conversation messages.
+    pub fn messages(mut self, messages: Vec<ChatMessage>) -> Self {
+        self.messages = messages;
+        self
+    }
+
+    /// Appends a single message to the conversation.
+    pub fn message(mut self, message: ChatMessage) -> Self {
+        self.messages.push(message);
+        self
+    }
+
+    /// Sets the model identifier (overrides provider default).
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    /// Sets the sampling temperature.
+    pub fn temperature(mut self, temp: f32) -> Self {
+        self.temperature = Some(temp);
+        self
+    }
+
+    /// Sets the maximum number of tokens to generate.
+    pub fn max_tokens(mut self, tokens: u32) -> Self {
+        self.max_tokens = Some(tokens);
+        self
+    }
+
+    /// Sets the tool definitions available for this call.
+    pub fn tools(mut self, tools: Vec<ToolSpec>) -> Self {
+        self.tools = Some(tools);
+        self
+    }
+
+    /// Consumes the builder and produces an [`LlmRequest`].
+    pub fn build(self) -> LlmRequest {
+        LlmRequest {
+            model: self.model,
+            messages: self.messages,
+            temperature: self.temperature,
+            max_tokens: self.max_tokens,
+            tools: self.tools,
+        }
+    }
 }
 
 /// Response from an LLM chat completion.
