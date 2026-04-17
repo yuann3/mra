@@ -208,16 +208,18 @@ impl SupervisorRunner {
             exit: exit.clone(),
         });
 
-        // Emit BudgetExceeded event with usage snapshot
-        if matches!(exit, ChildExit::BudgetExceeded) {
-            let (used, limit) = self
+        // Emit per-agent BudgetExceeded only when the agent has a per-agent limit.
+        // If the exit was caused by the global budget, the __global__ event from
+        // check_global_budget() covers it; ChildExited still fires unconditionally.
+        if matches!(exit, ChildExit::BudgetExceeded)
+            && let Some(usage) = self
                 .lifecycle_budget()
                 .and_then(|b| b.agent_usage(&name))
-                .map(|u| (u.used, u.limit.unwrap_or(0)))
-                .unwrap_or((0, 0));
+            && let Some(limit) = usage.limit
+        {
             self.emit(SupervisorEvent::BudgetExceeded {
                 name: name.clone(),
-                used,
+                used: usage.used,
                 limit,
             });
         }

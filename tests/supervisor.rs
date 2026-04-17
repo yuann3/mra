@@ -542,10 +542,14 @@ impl AgentBehavior for BudgetExceededBehavior {
 
 #[tokio::test]
 async fn test_budget_exceeded_agent_not_restarted_and_event_emitted() {
+    use mra::budget::BudgetTracker;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     let start_count = Arc::new(AtomicU32::new(0));
     let count = start_count.clone();
+
+    // Budget tracker with per-agent limit so the BudgetExceeded event fires
+    let budget = Arc::new(BudgetTracker::builder().global_limit(100_000).build_unconnected());
 
     // Agent that fails with BudgetExceeded on first task
     let spec = ChildSpec::new(
@@ -575,9 +579,11 @@ async fn test_budget_exceeded_agent_not_restarted_and_event_emitted() {
                 >
         }),
     )
-    .with_restart(ChildRestart::Permanent); // Permanent — should STILL not restart on budget
+    .with_restart(ChildRestart::Permanent) // Permanent — should STILL not restart on budget
+    .with_token_budget(1000); // Per-agent limit so BudgetExceeded event fires
 
-    let (handle, join) = SupervisorHandle::start(SupervisorConfig::default());
+    let config = SupervisorConfig::builder().budget(budget).build();
+    let (handle, join) = SupervisorHandle::start(config);
     let mut events = handle.subscribe();
 
     // Drain SupervisorStarted
