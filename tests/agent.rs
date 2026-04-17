@@ -257,3 +257,54 @@ async fn test_agent_report_progress() {
     spawned.handle.cancel();
     spawned.join.await.unwrap();
 }
+
+#[tokio::test]
+async fn test_execute_with_timeout_succeeds_within_deadline() {
+    let cancel = CancellationToken::new();
+
+    let spawned = AgentSpawn::new("echo", EchoBehavior).cancel(cancel).spawn();
+
+    let task = Task::new("hello timeout");
+    let reply = spawned
+        .handle
+        .execute_with_timeout(task, Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(reply.output, "hello timeout");
+
+    spawned.handle.cancel();
+    spawned.join.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_execute_with_timeout_returns_timeout_error() {
+    struct HangBehavior;
+    impl AgentBehavior for HangBehavior {
+        async fn handle(
+            &mut self,
+            _ctx: &mut AgentCtx,
+            _input: Task,
+        ) -> Result<AgentReply, AgentError> {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            unreachable!()
+        }
+    }
+
+    let cancel = CancellationToken::new();
+
+    let spawned = AgentSpawn::new("hanger", HangBehavior)
+        .cancel(cancel)
+        .spawn();
+
+    let task = Task::new("will timeout");
+    let result = spawned
+        .handle
+        .execute_with_timeout(task, Duration::from_millis(50))
+        .await;
+
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), AgentError::Timeout));
+
+    spawned.handle.cancel();
+    spawned.join.await.unwrap();
+}
