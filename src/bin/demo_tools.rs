@@ -63,7 +63,7 @@ fn truncate_display(s: &str, max: usize) -> String {
 impl AgentBehavior for Coder {
     async fn handle(&mut self, ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
         let task_id = input.id;
-        let tool_specs: Vec<_> = ctx.tools.specs().into_iter().cloned().collect();
+        let tool_specs = ctx.tools.specs();
 
         let mut messages = vec![
             ChatMessage {
@@ -168,7 +168,7 @@ impl AgentBehavior for Coder {
 /// Registers the three tools the coder agent has access to.
 /// Shell gets a longer timeout (60s) since `cargo clippy` can be slow.
 fn build_tool_registry() -> ToolRegistry {
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry
         .register(Arc::new(ShellTool::with_timeout(Duration::from_secs(60))))
         .unwrap();
