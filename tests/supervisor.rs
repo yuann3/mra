@@ -549,7 +549,11 @@ async fn test_budget_exceeded_agent_not_restarted_and_event_emitted() {
     let count = start_count.clone();
 
     // Budget tracker with per-agent limit so the BudgetExceeded event fires
-    let budget = Arc::new(BudgetTracker::builder().global_limit(100_000).build_unconnected());
+    let budget = Arc::new(
+        BudgetTracker::builder()
+            .global_limit(100_000)
+            .build_unconnected(),
+    );
 
     // Agent that fails with BudgetExceeded on first task
     let spec = ChildSpec::new(

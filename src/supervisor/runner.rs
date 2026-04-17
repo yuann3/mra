@@ -212,9 +212,7 @@ impl SupervisorRunner {
         // If the exit was caused by the global budget, the __global__ event from
         // check_global_budget() covers it; ChildExited still fires unconditionally.
         if matches!(exit, ChildExit::BudgetExceeded)
-            && let Some(usage) = self
-                .lifecycle_budget()
-                .and_then(|b| b.agent_usage(&name))
+            && let Some(usage) = self.lifecycle_budget().and_then(|b| b.agent_usage(&name))
             && let Some(limit) = usage.limit
         {
             self.emit(SupervisorEvent::BudgetExceeded {
