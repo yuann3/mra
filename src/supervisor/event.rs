@@ -73,8 +73,13 @@ pub enum SupervisorEvent {
         error: String,
     },
     /// A token budget was exceeded.
+    ///
+    /// For per-agent budget exhaustion, `name` is the agent's name and
+    /// usage comes from [`BudgetTracker::agent_usage`](crate::budget::BudgetTracker::agent_usage).
+    /// For global budget exhaustion, `name` is `"__global__"` and usage
+    /// comes from [`BudgetTracker::run_usage`](crate::budget::BudgetTracker::run_usage).
     BudgetExceeded {
-        /// Agent name that exceeded the budget.
+        /// Agent name, or `"__global__"` for the run-level budget.
         name: String,
         /// Tokens used.
         used: u64,
