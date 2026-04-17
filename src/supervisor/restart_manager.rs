@@ -99,6 +99,12 @@ impl RestartManager {
         hung: bool,
         now: Instant,
     ) -> RestartDecision {
+        // Budget exhaustion is terminal — the counter is latched, so restarting
+        // is futile. Return early before recording anything in trackers.
+        if matches!(exit, ChildExit::BudgetExceeded) {
+            return RestartDecision::NoRestart;
+        }
+
         let Some(child) = self.children.get_mut(name) else {
             return RestartDecision::NoRestart;
         };
@@ -417,6 +423,102 @@ mod tests {
         // Third cascade — should fail (exceeded)
         assert!(!mgr.record_all(now + Duration::from_millis(2)));
         assert_eq!(mgr.intensity_total_restarts(), 3);
+    }
+
+    #[test]
+    fn decide_no_restart_for_budget_exceeded_permanent() {
+        let config = test_config(Strategy::OneForOne);
+        let mut mgr = RestartManager::new(&config);
+        mgr.register("perm", ChildRestart::Permanent, &test_restart_policy());
+
+        let decision = mgr.decide(
+            "perm",
+            &ChildExit::BudgetExceeded,
+            false,
+            Instant::now(),
+        );
+        assert!(matches!(decision, RestartDecision::NoRestart));
+    }
+
+    #[test]
+    fn decide_no_restart_for_budget_exceeded_transient() {
+        let config = test_config(Strategy::OneForOne);
+        let mut mgr = RestartManager::new(&config);
+        mgr.register("trans", ChildRestart::Transient, &test_restart_policy());
+
+        let decision = mgr.decide(
+            "trans",
+            &ChildExit::BudgetExceeded,
+            false,
+            Instant::now(),
+        );
+        assert!(matches!(decision, RestartDecision::NoRestart));
+    }
+
+    #[test]
+    fn decide_no_restart_for_budget_exceeded_temporary() {
+        let config = test_config(Strategy::OneForOne);
+        let mut mgr = RestartManager::new(&config);
+        mgr.register("temp", ChildRestart::Temporary, &test_restart_policy());
+
+        let decision = mgr.decide(
+            "temp",
+            &ChildExit::BudgetExceeded,
+            false,
+            Instant::now(),
+        );
+        assert!(matches!(decision, RestartDecision::NoRestart));
+    }
+
+    #[test]
+    fn decide_budget_exceeded_does_not_increment_counters() {
+        let config = SupervisorConfig::builder()
+            .strategy(Strategy::OneForOne)
+            .intensity(RestartIntensity {
+                max_restarts: 1,
+                window: Duration::from_secs(60),
+            })
+            .build();
+        let mut mgr = RestartManager::new(&config);
+        let policy = RestartPolicy {
+            max_restarts: 1,
+            window: Duration::from_secs(60),
+            backoff_base: Duration::from_millis(10),
+            backoff_max: Duration::from_millis(100),
+        };
+        mgr.register("child", ChildRestart::Permanent, &policy);
+
+        let now = Instant::now();
+
+        // BudgetExceeded should NOT consume restart quota
+        mgr.decide("child", &ChildExit::BudgetExceeded, false, now);
+        mgr.decide(
+            "child",
+            &ChildExit::BudgetExceeded,
+            false,
+            now + Duration::from_millis(1),
+        );
+
+        // A real failure should still be allowed (limit is 1)
+        let decision = mgr.decide(
+            "child",
+            &ChildExit::Failed("err".into()),
+            false,
+            now + Duration::from_millis(2),
+        );
+        assert!(
+            matches!(decision, RestartDecision::RestartAfter { .. }),
+            "budget exits should not have consumed the restart quota"
+        );
+
+        // Now a second real failure should exceed the limit
+        let decision2 = mgr.decide(
+            "child",
+            &ChildExit::Failed("err".into()),
+            false,
+            now + Duration::from_millis(3),
+        );
+        assert!(matches!(decision2, RestartDecision::ChildLimitExceeded { .. }));
     }
 
     #[test]

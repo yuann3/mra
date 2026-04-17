@@ -121,6 +121,10 @@ impl SupervisorRunner {
         let _ = self.event_tx.send(event);
     }
 
+    fn lifecycle_budget(&self) -> Option<&std::sync::Arc<crate::budget::BudgetTracker>> {
+        self.lifecycle.budget()
+    }
+
     async fn handle_command(&mut self, cmd: SupervisorCommand) -> Result<(), SupervisorError> {
         match cmd {
             SupervisorCommand::StartChild { spec, reply } => {
@@ -197,6 +201,20 @@ impl SupervisorRunner {
             generation,
             exit: exit.clone(),
         });
+
+        // Emit BudgetExceeded event with usage snapshot
+        if matches!(exit, ChildExit::BudgetExceeded) {
+            let (used, limit) = self
+                .lifecycle_budget()
+                .and_then(|b| b.agent_usage(&name))
+                .map(|u| (u.used, u.limit.unwrap_or(0)))
+                .unwrap_or((0, 0));
+            self.emit(SupervisorEvent::BudgetExceeded {
+                name: name.clone(),
+                used,
+                limit,
+            });
+        }
 
         if self.cancel.is_cancelled() {
             return Ok(());

@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::budget::BudgetTracker;
 use crate::config::AgentConfig;
-use crate::error::AgentError;
+use crate::error::{AgentError, ErrorClass};
 use crate::ids::AgentId;
 use crate::llm::LlmProvider;
 use crate::supervisor::ChildExit;
@@ -137,7 +137,15 @@ impl<B: AgentBehavior> AgentRunner<B> {
                             busy: false,
                         });
 
+                        let is_budget = result.as_ref().is_err_and(|e| {
+                            e.classification() == ErrorClass::BudgetExceeded
+                        });
+
                         let _ = respond_to.send(result);
+
+                        if is_budget {
+                            return ChildExit::BudgetExceeded;
+                        }
                     }
                     Some(AgentMessage::Shutdown { deadline }) => {
                         self.receiver.close();

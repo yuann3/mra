@@ -359,6 +359,11 @@ impl ChildLifecycle {
         self.children.get(name)
     }
 
+    /// Returns a reference to the shared budget tracker, if configured.
+    pub fn budget(&self) -> Option<&Arc<BudgetTracker>> {
+        self.config.budget.as_ref()
+    }
+
     /// Returns true if no children are being tracked.
     #[allow(dead_code)] // useful for testing and future use
     pub fn is_empty(&self) -> bool {
