@@ -431,12 +431,7 @@ mod tests {
         let mut mgr = RestartManager::new(&config);
         mgr.register("perm", ChildRestart::Permanent, &test_restart_policy());
 
-        let decision = mgr.decide(
-            "perm",
-            &ChildExit::BudgetExceeded,
-            false,
-            Instant::now(),
-        );
+        let decision = mgr.decide("perm", &ChildExit::BudgetExceeded, false, Instant::now());
         assert!(matches!(decision, RestartDecision::NoRestart));
     }
 
@@ -446,12 +441,7 @@ mod tests {
         let mut mgr = RestartManager::new(&config);
         mgr.register("trans", ChildRestart::Transient, &test_restart_policy());
 
-        let decision = mgr.decide(
-            "trans",
-            &ChildExit::BudgetExceeded,
-            false,
-            Instant::now(),
-        );
+        let decision = mgr.decide("trans", &ChildExit::BudgetExceeded, false, Instant::now());
         assert!(matches!(decision, RestartDecision::NoRestart));
     }
 
@@ -461,12 +451,7 @@ mod tests {
         let mut mgr = RestartManager::new(&config);
         mgr.register("temp", ChildRestart::Temporary, &test_restart_policy());
 
-        let decision = mgr.decide(
-            "temp",
-            &ChildExit::BudgetExceeded,
-            false,
-            Instant::now(),
-        );
+        let decision = mgr.decide("temp", &ChildExit::BudgetExceeded, false, Instant::now());
         assert!(matches!(decision, RestartDecision::NoRestart));
     }
 
@@ -518,7 +503,10 @@ mod tests {
             false,
             now + Duration::from_millis(3),
         );
-        assert!(matches!(decision2, RestartDecision::ChildLimitExceeded { .. }));
+        assert!(matches!(
+            decision2,
+            RestartDecision::ChildLimitExceeded { .. }
+        ));
     }
 
     #[test]

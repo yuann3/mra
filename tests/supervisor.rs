@@ -555,19 +555,17 @@ async fn test_budget_exceeded_agent_not_restarted_and_event_emitted() {
             let count = count.clone();
             Box::pin(async move {
                 count.fetch_add(1, Ordering::SeqCst);
-                Ok(
-                    AgentSpawn::from_config(
-                        AgentConfig::new("budget-agent"),
-                        BudgetExceededBehavior,
-                    )
-                    .id(ctx.id)
-                    .cancel(ctx.cancel)
-                    .peers(ctx.peers)
-                    .llm_opt(ctx.llm)
-                    .budget_opt(ctx.budget)
-                    .tools(ctx.tools)
-                    .spawn_child(),
+                Ok(AgentSpawn::from_config(
+                    AgentConfig::new("budget-agent"),
+                    BudgetExceededBehavior,
                 )
+                .id(ctx.id)
+                .cancel(ctx.cancel)
+                .peers(ctx.peers)
+                .llm_opt(ctx.llm)
+                .budget_opt(ctx.budget)
+                .tools(ctx.tools)
+                .spawn_child())
             })
                 as Pin<
                     Box<
@@ -613,7 +611,10 @@ async fn test_budget_exceeded_agent_not_restarted_and_event_emitted() {
         }
     }
 
-    assert!(found_child_exited, "should emit ChildExited with BudgetExceeded");
+    assert!(
+        found_child_exited,
+        "should emit ChildExited with BudgetExceeded"
+    );
     assert!(found_budget_event, "should emit BudgetExceeded event");
 
     // Wait a bit — agent should NOT have been restarted
@@ -736,7 +737,11 @@ async fn test_global_budget_exceeded_shuts_down_supervisor() {
     use mra::budget::BudgetTracker;
 
     // Create a budget that's already exceeded
-    let budget = Arc::new(BudgetTracker::builder().global_limit(10).build_unconnected());
+    let budget = Arc::new(
+        BudgetTracker::builder()
+            .global_limit(10)
+            .build_unconnected(),
+    );
     budget.charge_global(100).unwrap_err(); // Trip the budget
 
     let config = SupervisorConfig::builder()
@@ -771,9 +776,15 @@ async fn test_global_budget_exceeded_shuts_down_supervisor() {
         found_global_budget,
         "should emit BudgetExceeded with __global__ sentinel"
     );
-    assert!(found_stopping, "should emit SupervisorStopping on budget shutdown");
+    assert!(
+        found_stopping,
+        "should emit SupervisorStopping on budget shutdown"
+    );
 
     // Supervisor should exit cleanly (Ok), not with an error
     let result = join.await.unwrap();
-    assert!(result.is_ok(), "supervisor should return Ok on budget shutdown");
+    assert!(
+        result.is_ok(),
+        "supervisor should return Ok on budget shutdown"
+    );
 }
