@@ -103,6 +103,10 @@ impl SupervisorRunner {
 
                 _ = hang_tick.tick() => {
                     self.check_hangs().await;
+                    if self.check_global_budget() {
+                        self.drain_all().await;
+                        break Ok(());
+                    }
                 }
 
                 _ = restart_sleep, if !self.pending_restarts.is_empty() => {
@@ -365,6 +369,23 @@ impl SupervisorRunner {
         });
 
         Ok(())
+    }
+
+    /// Returns `true` if the global budget has been exceeded, emitting events.
+    fn check_global_budget(&self) -> bool {
+        let Some(budget) = self.lifecycle_budget() else {
+            return false;
+        };
+        if !budget.is_global_exceeded() {
+            return false;
+        }
+        let usage = budget.run_usage();
+        self.emit(SupervisorEvent::BudgetExceeded {
+            name: "__global__".to_string(),
+            used: usage.used,
+            limit: usage.limit.unwrap_or(0),
+        });
+        true
     }
 
     async fn check_hangs(&mut self) {

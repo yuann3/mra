@@ -654,3 +654,52 @@ async fn test_budget_exceeded_sibling_continues() {
     handle.shutdown().await;
     let _ = join.await;
 }
+
+// --- Global budget monitoring tests ---
+
+#[tokio::test]
+async fn test_global_budget_exceeded_shuts_down_supervisor() {
+    use mra::budget::BudgetTracker;
+
+    // Create a budget that's already exceeded
+    let budget = Arc::new(BudgetTracker::builder().global_limit(10).build_unconnected());
+    budget.charge_global(100).unwrap_err(); // Trip the budget
+
+    let config = SupervisorConfig::builder()
+        .hang_check_interval(Duration::from_millis(50))
+        .budget(budget)
+        .build();
+
+    let (handle, join) = SupervisorHandle::start(config);
+    let mut events = handle.subscribe();
+
+    // Start a child so the supervisor has work
+    let _agent = handle.start_child(echo_spec("worker")).await.unwrap();
+
+    // Collect events — expect BudgetExceeded with __global__ and SupervisorStopping
+    let mut found_global_budget = false;
+    let mut found_stopping = false;
+    for _ in 0..30 {
+        match tokio::time::timeout(Duration::from_millis(200), events.recv()).await {
+            Ok(Ok(SupervisorEvent::BudgetExceeded { name, .. })) if name == "__global__" => {
+                found_global_budget = true;
+            }
+            Ok(Ok(SupervisorEvent::SupervisorStopping)) => {
+                found_stopping = true;
+                break;
+            }
+            Ok(Ok(_)) => continue,
+            _ => break,
+        }
+    }
+
+    assert!(
+        found_global_budget,
+        "should emit BudgetExceeded with __global__ sentinel"
+    );
+    assert!(found_stopping, "should emit SupervisorStopping on budget shutdown");
+
+    // Supervisor should exit cleanly (Ok), not with an error
+    let result = join.await.unwrap();
+    assert!(result.is_ok(), "supervisor should return Ok on budget shutdown");
+}
