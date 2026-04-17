@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::budget::BudgetTracker;
 use crate::config::AgentConfig;
-use crate::error::AgentError;
+use crate::error::{AgentError, ErrorClass};
 use crate::ids::AgentId;
 use crate::llm::LlmProvider;
 use crate::supervisor::ChildExit;
@@ -137,7 +137,20 @@ impl<B: AgentBehavior> AgentRunner<B> {
                             busy: false,
                         });
 
-                        let _ = respond_to.send(result);
+                        let is_budget = result.as_ref().is_err_and(|e| {
+                            e.classification() == ErrorClass::BudgetExceeded
+                        });
+
+                        if respond_to.send(result).is_err() {
+                            tracing::debug!(
+                                agent = %self.ctx.name,
+                                "task response dropped: caller's receiver was closed"
+                            );
+                        }
+
+                        if is_budget {
+                            return ChildExit::BudgetExceeded;
+                        }
                     }
                     Some(AgentMessage::Shutdown { deadline }) => {
                         self.receiver.close();
@@ -174,7 +187,12 @@ impl<B: AgentBehavior> AgentRunner<B> {
                             busy: false,
                         });
 
-                        let _ = respond_to.send(result);
+                        if respond_to.send(result).is_err() {
+                            tracing::debug!(
+                                agent = %self.ctx.name,
+                                "drain response dropped: caller's receiver was closed"
+                            );
+                        }
                     }
                     Some(AgentMessage::Shutdown { .. }) => {}
                 },
@@ -184,8 +202,13 @@ impl<B: AgentBehavior> AgentRunner<B> {
 
     fn fail_remaining(&mut self) {
         while let Ok(msg) = self.receiver.try_recv() {
-            if let AgentMessage::Execute { respond_to, .. } = msg {
-                let _ = respond_to.send(Err(AgentError::Cancelled));
+            if let AgentMessage::Execute { respond_to, .. } = msg
+                && respond_to.send(Err(AgentError::Cancelled)).is_err()
+            {
+                tracing::debug!(
+                    agent = %self.ctx.name,
+                    "fail_remaining response dropped: caller's receiver was closed"
+                );
             }
         }
     }

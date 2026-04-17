@@ -26,6 +26,8 @@ pub enum ChildExit {
     Shutdown,
     /// The agent's behavior handler returned an error.
     Failed(String),
+    /// The agent's token/cost budget was exceeded. Terminal — restarting is futile.
+    BudgetExceeded,
 }
 
 impl ChildExit {

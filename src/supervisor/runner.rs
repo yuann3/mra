@@ -103,6 +103,10 @@ impl SupervisorRunner {
 
                 _ = hang_tick.tick() => {
                     self.check_hangs().await;
+                    if self.check_global_budget() {
+                        self.drain_all().await;
+                        break Ok(());
+                    }
                 }
 
                 _ = restart_sleep, if !self.pending_restarts.is_empty() => {
@@ -118,7 +122,13 @@ impl SupervisorRunner {
     }
 
     fn emit(&self, event: SupervisorEvent) {
-        let _ = self.event_tx.send(event);
+        if self.event_tx.send(event).is_err() {
+            tracing::debug!("supervisor event dropped: no active subscribers");
+        }
+    }
+
+    fn lifecycle_budget(&self) -> Option<&std::sync::Arc<crate::budget::BudgetTracker>> {
+        self.lifecycle.budget()
     }
 
     async fn handle_command(&mut self, cmd: SupervisorCommand) -> Result<(), SupervisorError> {
@@ -197,6 +207,20 @@ impl SupervisorRunner {
             generation,
             exit: exit.clone(),
         });
+
+        // Emit per-agent BudgetExceeded only when the agent has a per-agent limit.
+        // If the exit was caused by the global budget, the __global__ event from
+        // check_global_budget() covers it; ChildExited still fires unconditionally.
+        if matches!(exit, ChildExit::BudgetExceeded)
+            && let Some(usage) = self.lifecycle_budget().and_then(|b| b.agent_usage(&name))
+            && let Some(limit) = usage.limit
+        {
+            self.emit(SupervisorEvent::BudgetExceeded {
+                name: name.clone(),
+                used: usage.used,
+                limit,
+            });
+        }
 
         if self.cancel.is_cancelled() {
             return Ok(());
@@ -278,8 +302,11 @@ impl SupervisorRunner {
             // Restart via lifecycle
             let new_gen = match self.lifecycle.restart(child_name, spec, &peers).await {
                 Ok(generation) => generation,
-                Err(_) => {
-                    // Factory failed — skip this child
+                Err(e) => {
+                    self.emit(SupervisorEvent::ChildSpawnFailed {
+                        name: child_name.clone(),
+                        error: e.to_string(),
+                    });
                     continue;
                 }
             };
@@ -332,8 +359,11 @@ impl SupervisorRunner {
         // Restart via lifecycle
         let new_gen = match self.lifecycle.restart(name, spec, &peers).await {
             Ok(generation) => generation,
-            Err(_) => {
-                // Factory failed — leave child dead
+            Err(e) => {
+                self.emit(SupervisorEvent::ChildSpawnFailed {
+                    name: name.to_string(),
+                    error: e.to_string(),
+                });
                 return Ok(());
             }
         };
@@ -347,6 +377,23 @@ impl SupervisorRunner {
         });
 
         Ok(())
+    }
+
+    /// Returns `true` if the global budget has been exceeded, emitting events.
+    fn check_global_budget(&self) -> bool {
+        let Some(budget) = self.lifecycle_budget() else {
+            return false;
+        };
+        if !budget.is_global_exceeded() {
+            return false;
+        }
+        let usage = budget.run_usage();
+        self.emit(SupervisorEvent::BudgetExceeded {
+            name: "__global__".to_string(),
+            used: usage.used,
+            limit: usage.limit.unwrap_or(0),
+        });
+        true
     }
 
     async fn check_hangs(&mut self) {
