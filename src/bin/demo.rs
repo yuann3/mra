@@ -50,9 +50,8 @@ impl AgentBehavior for Researcher {
     async fn handle(&mut self, ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
         let task_id = input.id;
 
-        let request = LlmRequest {
-            model: None,
-            messages: vec![
+        let request = LlmRequest::builder()
+            .messages(vec![
                 ChatMessage {
                     role: Role::System,
                     content: RESEARCHER_SYSTEM.into(),
@@ -65,11 +64,10 @@ impl AgentBehavior for Researcher {
                     tool_calls: vec![],
                     tool_call_id: None,
                 },
-            ],
-            temperature: Some(0.3),
-            max_tokens: Some(1024),
-            tools: None,
-        };
+            ])
+            .temperature(0.3)
+            .max_tokens(1024)
+            .build();
 
         let response = ctx.chat(&request).await?;
         let tokens = response.total_tokens();
@@ -95,9 +93,8 @@ impl AgentBehavior for Writer {
     async fn handle(&mut self, ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
         let task_id = input.id;
 
-        let request = LlmRequest {
-            model: None,
-            messages: vec![
+        let request = LlmRequest::builder()
+            .messages(vec![
                 ChatMessage {
                     role: Role::System,
                     content: WRITER_SYSTEM.into(),
@@ -110,11 +107,10 @@ impl AgentBehavior for Writer {
                     tool_calls: vec![],
                     tool_call_id: None,
                 },
-            ],
-            temperature: Some(0.7),
-            max_tokens: Some(2048),
-            tools: None,
-        };
+            ])
+            .temperature(0.7)
+            .max_tokens(2048)
+            .build();
 
         let response = ctx.chat(&request).await?;
         let tokens = response.total_tokens();
@@ -139,9 +135,8 @@ impl AgentBehavior for Editor {
     async fn handle(&mut self, ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
         let task_id = input.id;
 
-        let request = LlmRequest {
-            model: None,
-            messages: vec![
+        let request = LlmRequest::builder()
+            .messages(vec![
                 ChatMessage {
                     role: Role::System,
                     content: EDITOR_SYSTEM.into(),
@@ -154,11 +149,10 @@ impl AgentBehavior for Editor {
                     tool_calls: vec![],
                     tool_call_id: None,
                 },
-            ],
-            temperature: Some(0.3),
-            max_tokens: Some(2048),
-            tools: None,
-        };
+            ])
+            .temperature(0.3)
+            .max_tokens(2048)
+            .build();
 
         let response = ctx.chat(&request).await?;
         let tokens = response.total_tokens();
@@ -215,11 +209,13 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = MraConfig::load()?;
-    let llm: Arc<dyn LlmProvider> = Arc::new(OpenRouterClient::new(
-        config.llm.base_url.clone(),
-        config.llm.api_key.clone(),
-        config.llm.model.clone(),
-    ));
+    let llm: Arc<dyn LlmProvider> = Arc::new(
+        OpenRouterClient::builder()
+            .api_key(&config.llm.api_key)
+            .base_url(&config.llm.base_url)
+            .default_model(&config.llm.model)
+            .build(),
+    );
 
     // The supervisor checks every 5s for hung agents and restarts them.
     // A global token budget of 50k caps total LLM spend across all agents.
@@ -323,9 +319,9 @@ async fn main() -> anyhow::Result<()> {
             usage.limit.map_or("∞".to_string(), |l| l.to_string())
         );
     }
-    for name in &["researcher", "writer", "editor"] {
-        if let Some(usage) = runtime.agent_token_usage(name) {
-            println!("   {name}: {} tokens (direct LLM usage)", usage.used);
+    for child in runtime.list_children().await {
+        if let Some(usage) = runtime.agent_token_usage(&child.name) {
+            println!("   {}: {} tokens (direct LLM usage)", child.name, usage.used);
         }
     }
 

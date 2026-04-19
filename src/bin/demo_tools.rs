@@ -86,13 +86,12 @@ impl AgentBehavior for Coder {
         // Each iteration is one LLM round-trip. The loop exits when the LLM
         // replies with plain text (no tool calls) or we hit the iteration cap.
         for iteration in 1..=MAX_ITERATIONS {
-            let request = LlmRequest {
-                model: None,
-                messages: messages.clone(),
-                temperature: Some(0.2),
-                max_tokens: Some(4096),
-                tools: Some(tool_specs.clone()),
-            };
+            let request = LlmRequest::builder()
+                .messages(messages.clone())
+                .temperature(0.2)
+                .max_tokens(4096)
+                .tools(tool_specs.clone())
+                .build();
 
             let response = ctx.chat(&request).await?;
             total_prompt += response.prompt_tokens;
@@ -170,7 +169,11 @@ impl AgentBehavior for Coder {
 fn build_tool_registry() -> ToolRegistry {
     let registry = ToolRegistry::new();
     registry
-        .register(Arc::new(ShellTool::with_timeout(Duration::from_secs(60))))
+        .register(Arc::new(
+            ShellTool::builder()
+                .timeout(Duration::from_secs(60))
+                .build(),
+        ))
         .unwrap();
     registry.register(Arc::new(ReadFileTool::new())).unwrap();
     registry.register(Arc::new(EditFileTool::new())).unwrap();
@@ -217,11 +220,13 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = MraConfig::load()?;
-    let llm: Arc<dyn LlmProvider> = Arc::new(OpenRouterClient::new(
-        config.llm.base_url.clone(),
-        config.llm.api_key.clone(),
-        config.llm.model.clone(),
-    ));
+    let llm: Arc<dyn LlmProvider> = Arc::new(
+        OpenRouterClient::builder()
+            .api_key(&config.llm.api_key)
+            .base_url(&config.llm.base_url)
+            .default_model(&config.llm.model)
+            .build(),
+    );
 
     let sup_config = SupervisorConfig::builder()
         .hang_check_interval(Duration::from_secs(5))
@@ -310,8 +315,10 @@ async fn main() -> anyhow::Result<()> {
             usage.limit.map_or("∞".to_string(), |l| l.to_string())
         );
     }
-    if let Some(usage) = runtime.agent_token_usage("coder") {
-        println!("   coder: {} tokens (direct LLM usage)", usage.used);
+    for child in runtime.list_children().await {
+        if let Some(usage) = runtime.agent_token_usage(&child.name) {
+            println!("   {}: {} tokens (direct LLM usage)", child.name, usage.used);
+        }
     }
 
     runtime.shutdown().await;
