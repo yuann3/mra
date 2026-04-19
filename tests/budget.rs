@@ -204,8 +204,14 @@ fn test_reset_agent_clears_usage() {
     let _ = tracker.charge("writer", 300); // used=600, limit=500 -> tripped
     assert!(tracker.is_agent_exceeded("writer"));
 
+    // Capture global usage before reset
+    let global_before = tracker.run_usage().used;
+
     // Reset the agent
     tracker.reset_agent("writer");
+
+    // Global usage should be unchanged (reset is per-agent only)
+    assert_eq!(tracker.run_usage().used, global_before);
 
     // used should be 0, not tripped, limit preserved
     let usage = tracker.agent_usage("writer").unwrap();

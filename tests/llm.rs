@@ -282,7 +282,7 @@ fn test_llm_request_builder_all_fields() {
 }
 
 #[test]
-fn test_llm_request_builder_single_message() {
+fn test_llm_request_builder_accumulates_messages() {
     let msg1 = ChatMessage {
         role: Role::User,
         content: "hello".into(),

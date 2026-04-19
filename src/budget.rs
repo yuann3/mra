@@ -199,10 +199,9 @@ impl BudgetTracker {
     /// If the new limit exceeds current usage, the tripped flag is cleared
     /// so that subsequent charges can succeed again.
     pub fn set_global_limit(&self, new_limit: u64) {
-        {
-            let mut limit = self.global_limit.write().unwrap();
-            *limit = Some(new_limit);
-        }
+        let mut limit = self.global_limit.write().unwrap();
+        *limit = Some(new_limit);
+
         let used = self.global_used.load(Ordering::Relaxed);
         if new_limit >= used {
             let _ = self.global_tripped.compare_exchange(

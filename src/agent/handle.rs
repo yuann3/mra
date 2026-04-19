@@ -74,6 +74,10 @@ impl AgentHandle {
 
     /// Sends a [`Task`] to the agent and awaits the reply, failing with
     /// [`AgentError::Timeout`] if the agent does not respond within `timeout`.
+    ///
+    /// This only bounds how long the caller waits for a reply. If the task
+    /// has already been accepted by the mailbox, the agent may continue
+    /// processing it and the eventual response will be dropped.
     pub async fn execute_with_timeout(
         &self,
         task: Task,
