@@ -263,7 +263,7 @@ async fn swarm_runtime_loads_wasm_tools_into_registry() {
     use mra::tool::ToolRegistry;
 
     let mut runtime = SwarmRuntime::new(SupervisorConfig::default());
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
 
     let wasm_config = WasmConfig {
         tools_dir: fixture_path("tools"),
@@ -271,9 +271,7 @@ async fn swarm_runtime_loads_wasm_tools_into_registry() {
         epoch_tick_ms: Some(100),
     };
 
-    let count = runtime
-        .load_wasm_tools(&wasm_config, &mut registry)
-        .unwrap();
+    let count = runtime.load_wasm_tools(&wasm_config, &registry).unwrap();
     assert_eq!(count, 1);
 
     // Invoke the WASM tool through the registry
@@ -295,7 +293,7 @@ async fn native_and_wasm_tools_coexist() {
     use mra::tool::{ShellTool, ToolRegistry};
 
     let mut runtime = SwarmRuntime::new(SupervisorConfig::default());
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
 
     // Register a native tool
     registry.register(Arc::new(ShellTool::new())).unwrap();
@@ -306,9 +304,7 @@ async fn native_and_wasm_tools_coexist() {
         thread_pool_size: Some(2),
         epoch_tick_ms: Some(100),
     };
-    runtime
-        .load_wasm_tools(&wasm_config, &mut registry)
-        .unwrap();
+    runtime.load_wasm_tools(&wasm_config, &registry).unwrap();
 
     // Both tools are accessible
     assert!(registry.get("shell").is_some());
@@ -338,7 +334,7 @@ async fn wasm_tool_error_propagates_as_tool_error() {
     use mra::tool::ToolRegistry;
 
     let runtime = SwarmRuntime::new(SupervisorConfig::default());
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
 
     // Load the bad_output tool directly
     let wasm_runtime = Arc::new(WasmRuntime::new().unwrap());

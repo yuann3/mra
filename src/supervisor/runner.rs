@@ -14,6 +14,7 @@ use crate::agent::AgentHandle;
 use crate::error::SupervisorError;
 
 use super::ChildExit;
+use super::ChildStatus;
 use super::child::ChildSpec;
 use super::config::{ChildRestart, SupervisorConfig};
 use super::event::SupervisorEvent;
@@ -145,12 +146,42 @@ impl SupervisorRunner {
                 let handle = self.lifecycle.get_handle(&name);
                 let _ = reply.send(handle);
             }
+            SupervisorCommand::ListChildren { reply } => {
+                let statuses = self.build_child_statuses();
+                let _ = reply.send(statuses);
+            }
+            SupervisorCommand::GetChildStatus { name, reply } => {
+                let status = self.build_single_child_status(&name);
+                let _ = reply.send(status);
+            }
             SupervisorCommand::Shutdown => {
                 self.drain_all().await;
                 self.cancel.cancel();
             }
         }
         Ok(())
+    }
+
+    fn build_child_statuses(&self) -> Vec<ChildStatus> {
+        self.lifecycle
+            .children()
+            .map(|(name, record)| ChildStatus {
+                name: name.to_string(),
+                alive: record.alive,
+                generation: record.generation,
+                restart_count: self.restart_mgr.child_restart_count(name),
+            })
+            .collect()
+    }
+
+    fn build_single_child_status(&self, name: &str) -> Option<ChildStatus> {
+        let record = self.lifecycle.get(name)?;
+        Some(ChildStatus {
+            name: name.to_string(),
+            alive: record.alive,
+            generation: record.generation,
+            restart_count: self.restart_mgr.child_restart_count(name),
+        })
     }
 
     async fn do_start_child(&mut self, spec: ChildSpec) -> Result<AgentHandle, SupervisorError> {

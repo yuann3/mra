@@ -228,7 +228,7 @@ async fn test_supervisor_level_tools_available_in_child() {
         }
     }
 
-    let mut tools = mra::tool::ToolRegistry::new();
+    let tools = mra::tool::ToolRegistry::new();
     tools.register(Arc::new(DummyTool)).unwrap();
 
     let found_tool = Arc::new(AtomicBool::new(false));

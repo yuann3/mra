@@ -20,6 +20,7 @@ pub struct OpenRouterClient {
     http: reqwest::Client,
     chat_url: String,
     model: String,
+    default_temperature: Option<f32>,
 }
 
 /// Borrows request data for serialization — avoids cloning messages.
@@ -140,12 +141,78 @@ impl OpenRouterClient {
             http,
             chat_url,
             model,
+            default_temperature: None,
         }
+    }
+
+    /// Returns a two-stage builder for constructing an [`OpenRouterClient`].
+    ///
+    /// The first stage requires an API key; subsequent fields are optional
+    /// with sensible defaults.
+    pub fn builder() -> OpenRouterClientBuilderInit {
+        OpenRouterClientBuilderInit
     }
 
     /// Returns the configured default model name.
     pub fn model(&self) -> &str {
         &self.model
+    }
+
+    /// Returns the configured default temperature, if any.
+    pub fn default_temperature(&self) -> Option<f32> {
+        self.default_temperature
+    }
+}
+
+/// Initial stage of [`OpenRouterClient`] builder — requires an API key.
+pub struct OpenRouterClientBuilderInit;
+
+impl OpenRouterClientBuilderInit {
+    /// Sets the API key and advances to the main builder stage.
+    pub fn api_key(self, key: impl Into<String>) -> OpenRouterClientBuilder {
+        OpenRouterClientBuilder {
+            api_key: key.into(),
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            default_model: "anthropic/claude-sonnet-4".to_string(),
+            default_temperature: None,
+        }
+    }
+}
+
+/// Main builder stage for [`OpenRouterClient`].
+pub struct OpenRouterClientBuilder {
+    api_key: String,
+    base_url: String,
+    default_model: String,
+    default_temperature: Option<f32>,
+}
+
+impl OpenRouterClientBuilder {
+    /// Overrides the default model (default: `anthropic/claude-sonnet-4`).
+    pub fn default_model(mut self, model: impl Into<String>) -> Self {
+        self.default_model = model.into();
+        self
+    }
+
+    /// Sets the default sampling temperature applied when [`LlmRequest::temperature`]
+    /// is `None`.
+    pub fn default_temperature(mut self, temp: f32) -> Self {
+        self.default_temperature = Some(temp);
+        self
+    }
+
+    /// Overrides the base URL (default: `https://openrouter.ai/api/v1`).
+    pub fn base_url(mut self, url: impl Into<String>) -> Self {
+        self.base_url = url.into();
+        self
+    }
+
+    /// Consumes the builder and produces an [`OpenRouterClient`].
+    pub fn build(self) -> super::OpenRouterClient {
+        let mut client =
+            super::OpenRouterClient::new(self.base_url, self.api_key, self.default_model);
+        client.default_temperature = self.default_temperature;
+        client
     }
 }
 
@@ -206,10 +273,12 @@ impl LlmProvider for OpenRouterClient {
                     .collect()
             });
 
+            let temperature = request.temperature.or(self.default_temperature);
+
             let api_req = ApiRequest {
                 model,
                 messages,
-                temperature: request.temperature,
+                temperature,
                 max_tokens: request.max_tokens,
                 tools,
             };

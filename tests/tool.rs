@@ -90,7 +90,7 @@ async fn tool_invoke_returns_echoed_text() {
 
 #[test]
 fn registry_register_and_get() {
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(EchoTool::new())).unwrap();
     assert!(registry.get("echo").is_some());
     assert!(registry.get("nonexistent").is_none());
@@ -98,7 +98,7 @@ fn registry_register_and_get() {
 
 #[test]
 fn registry_specs_returns_all_specs() {
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(EchoTool::new())).unwrap();
     let specs = registry.specs();
     assert_eq!(specs.len(), 1);
@@ -107,7 +107,7 @@ fn registry_specs_returns_all_specs() {
 
 #[tokio::test]
 async fn registry_invoke_existing_tool() {
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(EchoTool::new())).unwrap();
     let result = registry
         .invoke("echo", json!({"text": "world"}))
@@ -125,7 +125,7 @@ async fn registry_invoke_not_found() {
 
 #[test]
 fn registry_clone_shares_tools() {
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(EchoTool::new())).unwrap();
     let cloned = registry.clone();
     assert!(cloned.get("echo").is_some());
@@ -394,7 +394,7 @@ impl AgentBehavior for ToolUsingBehavior {
 
 #[tokio::test]
 async fn agent_ctx_call_tool_works() {
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(EchoTool::new())).unwrap();
 
     let spawned = AgentSpawn::new("test", ToolUsingBehavior)
@@ -470,7 +470,7 @@ struct ChatWithToolsBehavior;
 
 impl AgentBehavior for ChatWithToolsBehavior {
     async fn handle(&mut self, ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
-        let tools_specs: Vec<_> = ctx.tools.specs().into_iter().cloned().collect();
+        let tools_specs = ctx.tools.specs();
         let request = LlmRequest {
             model: None,
             messages: vec![ChatMessage {
@@ -529,7 +529,7 @@ async fn chat_with_tools_one_tool_round() {
         plain_response("done", 20, 10),
     ]));
 
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(EchoTool::new())).unwrap();
     let spawned = spawn_tool_agent(llm.clone(), registry);
 
@@ -558,7 +558,7 @@ async fn chat_with_tools_max_iterations() {
         .collect();
 
     let llm = Arc::new(MockLlm::new(responses));
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(EchoTool::new())).unwrap();
     let spawned = spawn_tool_agent(llm.clone(), registry);
 
@@ -618,7 +618,7 @@ async fn chat_with_tools_token_aggregation() {
         plain_response("final", 300, 150),
     ]));
 
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(EchoTool::new())).unwrap();
     let spawned = spawn_tool_agent(llm.clone(), registry);
 
@@ -656,7 +656,7 @@ async fn chat_with_tools_budget_exceeded_mid_loop() {
     );
     budget.register_agent("test", None);
 
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(EchoTool::new())).unwrap();
 
     let spawned = AgentSpawn::new("test", ChatWithToolsBehavior)
@@ -670,4 +670,172 @@ async fn chat_with_tools_budget_exceeded_mid_loop() {
     // Second chat() in the loop hits the pre-check and returns BudgetExceeded.
     assert!(matches!(result, Err(AgentError::BudgetExceeded)));
     assert_eq!(llm.calls(), 1); // only first call went through
+}
+
+// --- ToolRegistry unregister / replace tests ---
+
+#[test]
+fn test_unregister_removes_tool() {
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool::new())).unwrap();
+    assert!(registry.unregister("echo"));
+    let result = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(registry.invoke("echo", json!({"text": "hi"})));
+    assert!(matches!(result, Err(ToolError::NotFound(_))));
+}
+
+#[test]
+fn test_unregister_returns_false_for_unknown() {
+    let registry = ToolRegistry::new();
+    assert!(!registry.unregister("nonexistent"));
+}
+
+#[tokio::test]
+async fn test_replace_swaps_tool() {
+    /// A tool that always returns "replacement" regardless of input.
+    struct ReplacementTool {
+        spec: ToolSpec,
+    }
+
+    impl ReplacementTool {
+        fn new() -> Self {
+            Self {
+                spec: ToolSpec {
+                    name: "echo".into(),
+                    description: "Replacement echo".into(),
+                    parameters: json!({"type": "object"}),
+                },
+            }
+        }
+    }
+
+    impl Tool for ReplacementTool {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+
+        fn invoke(
+            &self,
+            _args: Value,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + '_>> {
+            Box::pin(async move {
+                Ok(ToolOutput {
+                    content: "replacement".to_string(),
+                    is_error: false,
+                })
+            })
+        }
+    }
+
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool::new())).unwrap();
+
+    let old = registry.replace("echo", Arc::new(ReplacementTool::new()));
+    assert!(old.is_some());
+
+    let result = registry
+        .invoke("echo", json!({"text": "ignored"}))
+        .await
+        .unwrap();
+    assert_eq!(result.content, "replacement");
+}
+
+#[test]
+fn test_replace_returns_none_for_unknown() {
+    let registry = ToolRegistry::new();
+    let old = registry.replace("nonexistent", Arc::new(EchoTool::new()));
+    assert!(old.is_none());
+}
+
+#[test]
+fn test_specs_reflects_mutations() {
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool::new())).unwrap();
+    assert_eq!(registry.specs().len(), 1);
+
+    registry.unregister("echo");
+    assert_eq!(registry.specs().len(), 0);
+}
+
+// --- ShellTool builder tests ---
+
+#[test]
+fn test_shell_defaults_unchanged() {
+    let tool = ShellTool::new();
+    let spec = tool.spec();
+    assert_eq!(spec.name, "shell");
+}
+
+#[tokio::test]
+async fn test_shell_builder_custom_timeout() {
+    use std::time::Duration;
+
+    let tool = ShellTool::builder().timeout(Duration::from_secs(1)).build();
+    let result = tool.invoke(json!({"command": "sleep 5"})).await;
+    assert!(
+        matches!(result, Err(ToolError::ExecutionFailed(ref msg)) if msg.contains("timed out")),
+        "expected timeout error, got: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_shell_builder_custom_max_output() {
+    let tool = ShellTool::builder().max_output(16).build();
+    let result = tool
+        .invoke(json!({"command": "echo 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"}))
+        .await
+        .unwrap();
+    assert!(
+        result.content.contains("[truncated]"),
+        "expected truncation marker, got: {:?}",
+        result.content
+    );
+}
+
+// --- ReadFileTool builder tests ---
+
+#[test]
+fn test_read_file_defaults_unchanged() {
+    let tool = ReadFileTool::new();
+    let spec = tool.spec();
+    assert_eq!(spec.name, "read_file");
+}
+
+#[tokio::test]
+async fn test_read_file_builder_custom_max_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("big.txt");
+    std::fs::write(&path, "x".repeat(1024)).unwrap();
+
+    let tool = ReadFileTool::builder().max_size(64).build();
+    let result = tool
+        .invoke(json!({"path": path.to_str().unwrap()}))
+        .await
+        .unwrap();
+    assert!(
+        result.content.contains("[truncated]"),
+        "expected truncation marker, got: {:?}",
+        result.content
+    );
+    let before_marker = result.content.split("\n...[truncated]").next().unwrap();
+    assert!(before_marker.len() <= 64);
+}
+
+#[tokio::test]
+async fn test_read_file_with_max_size_convenience() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("big2.txt");
+    std::fs::write(&path, "y".repeat(512)).unwrap();
+
+    let tool = ReadFileTool::with_max_size(32);
+    let result = tool
+        .invoke(json!({"path": path.to_str().unwrap()}))
+        .await
+        .unwrap();
+    assert!(
+        result.content.contains("[truncated]"),
+        "expected truncation marker via with_max_size, got: {:?}",
+        result.content
+    );
 }

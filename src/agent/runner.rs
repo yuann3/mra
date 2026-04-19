@@ -239,6 +239,7 @@ impl AgentHandle {
         budget: Option<Arc<BudgetTracker>>,
         tools: ToolRegistry,
     ) -> SpawnedAgent {
+        let name = config.name.clone();
         let prepared = prepare_agent(AgentInit {
             id,
             config,
@@ -249,7 +250,7 @@ impl AgentHandle {
             budget,
             tools,
         });
-        let handle = AgentHandle::new(id, prepared.mailbox, cancel);
+        let handle = AgentHandle::new(name, id, prepared.mailbox, cancel);
         let join = tokio::spawn(prepared.runner.run());
 
         SpawnedAgent {

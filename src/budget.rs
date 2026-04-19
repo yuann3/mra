@@ -62,7 +62,7 @@ impl BudgetTrackerBuilder {
     pub fn build_unconnected(self) -> BudgetTracker {
         BudgetTracker {
             global_used: AtomicU64::new(0),
-            global_limit: self.global_limit,
+            global_limit: RwLock::new(self.global_limit),
             global_tripped: AtomicBool::new(false),
             agents: RwLock::new(HashMap::new()),
         }
@@ -77,7 +77,7 @@ impl BudgetTrackerBuilder {
 /// double-counting.
 pub struct BudgetTracker {
     global_used: AtomicU64,
-    global_limit: Option<u64>,
+    global_limit: RwLock<Option<u64>>,
     global_tripped: AtomicBool,
     agents: RwLock<HashMap<String, AgentBudget>>,
 }
@@ -167,7 +167,8 @@ impl BudgetTracker {
         let prev = self.global_used.fetch_add(tokens, Ordering::Relaxed);
         let new = prev.saturating_add(tokens);
 
-        if let Some(limit) = self.global_limit
+        let limit = *self.global_limit.read().unwrap();
+        if let Some(limit) = limit
             && new > limit
         {
             self.global_tripped.store(true, Ordering::Relaxed);
@@ -180,7 +181,7 @@ impl BudgetTracker {
     pub fn run_usage(&self) -> RunUsage {
         RunUsage {
             used: self.global_used.load(Ordering::Relaxed),
-            limit: self.global_limit,
+            limit: *self.global_limit.read().unwrap(),
         }
     }
 
@@ -191,6 +192,80 @@ impl BudgetTracker {
             used: a.used.load(Ordering::Relaxed),
             limit: a.limit,
         })
+    }
+
+    /// Update the global token limit at runtime.
+    ///
+    /// If the new limit exceeds current usage, the tripped flag is cleared
+    /// so that subsequent charges can succeed again.
+    pub fn set_global_limit(&self, new_limit: u64) {
+        let mut limit = self.global_limit.write().unwrap();
+        *limit = Some(new_limit);
+
+        let used = self.global_used.load(Ordering::Relaxed);
+        if new_limit >= used {
+            let _ = self.global_tripped.compare_exchange(
+                true,
+                false,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
+        }
+    }
+
+    /// Update the token limit for a registered agent.
+    ///
+    /// If the agent exists and the new limit exceeds (or removes) its
+    /// current usage, the tripped flag is cleared. If the agent is not
+    /// registered this is a no-op.
+    pub fn set_agent_limit(&self, name: &str, new_limit: Option<u64>) {
+        let mut agents = self.agents.write().unwrap();
+        if let Some(agent) = agents.get_mut(name) {
+            agent.limit = new_limit;
+            let used = agent.used.load(Ordering::Relaxed);
+            let should_untrip = match new_limit {
+                None => true,
+                Some(lim) => lim >= used,
+            };
+            if should_untrip {
+                let _ = agent.tripped.compare_exchange(
+                    true,
+                    false,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                );
+            }
+        }
+    }
+
+    /// Reset a registered agent's usage to zero.
+    ///
+    /// Clears both the usage counter and the tripped flag while
+    /// preserving the configured limit. No-op if the agent is not
+    /// registered.
+    pub fn reset_agent(&self, name: &str) {
+        let mut agents = self.agents.write().unwrap();
+        if let Some(agent) = agents.get_mut(name) {
+            agent.used.store(0, Ordering::Relaxed);
+            agent.tripped.store(false, Ordering::Relaxed);
+        }
+    }
+
+    /// Snapshot all registered agents and their current usage.
+    pub fn list_agents(&self) -> Vec<(String, AgentUsage)> {
+        let agents = self.agents.read().unwrap();
+        agents
+            .iter()
+            .map(|(name, a)| {
+                (
+                    name.clone(),
+                    AgentUsage {
+                        used: a.used.load(Ordering::Relaxed),
+                        limit: a.limit,
+                    },
+                )
+            })
+            .collect()
     }
 
     /// Whether the global budget has been tripped.

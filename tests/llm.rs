@@ -232,3 +232,120 @@ fn test_chat_message_serde_tool_result() {
     let roundtripped: ChatMessage = serde_json::from_str(&json).unwrap();
     assert_eq!(roundtripped.tool_call_id.as_deref(), Some("call_1"));
 }
+
+// ── LlmRequest builder tests ──────────────────────────────────────
+
+#[test]
+fn test_llm_request_builder_minimal() {
+    let msg = ChatMessage {
+        role: Role::User,
+        content: "hi".into(),
+        tool_calls: vec![],
+        tool_call_id: None,
+    };
+    let req = LlmRequest::builder().messages(vec![msg]).build();
+    assert_eq!(req.messages.len(), 1);
+    assert!(req.model.is_none());
+    assert!(req.temperature.is_none());
+    assert!(req.max_tokens.is_none());
+    assert!(req.tools.is_none());
+}
+
+#[test]
+fn test_llm_request_builder_all_fields() {
+    use mra::tool::ToolSpec;
+
+    let msg = ChatMessage {
+        role: Role::System,
+        content: "you are helpful".into(),
+        tool_calls: vec![],
+        tool_call_id: None,
+    };
+    let tool = ToolSpec {
+        name: "shell".into(),
+        description: "Run a command".into(),
+        parameters: json!({}),
+    };
+    let req = LlmRequest::builder()
+        .messages(vec![msg])
+        .model("gpt-4")
+        .temperature(0.5)
+        .max_tokens(200)
+        .tools(vec![tool])
+        .build();
+
+    assert_eq!(req.model.as_deref(), Some("gpt-4"));
+    assert_eq!(req.messages.len(), 1);
+    assert_eq!(req.temperature, Some(0.5));
+    assert_eq!(req.max_tokens, Some(200));
+    assert_eq!(req.tools.as_ref().unwrap().len(), 1);
+}
+
+#[test]
+fn test_llm_request_builder_accumulates_messages() {
+    let msg1 = ChatMessage {
+        role: Role::User,
+        content: "hello".into(),
+        tool_calls: vec![],
+        tool_call_id: None,
+    };
+    let msg2 = ChatMessage {
+        role: Role::Assistant,
+        content: "hi".into(),
+        tool_calls: vec![],
+        tool_call_id: None,
+    };
+    let req = LlmRequest::builder().message(msg1).message(msg2).build();
+
+    assert_eq!(req.messages.len(), 2);
+    assert_eq!(req.messages[0].content, "hello");
+    assert_eq!(req.messages[1].content, "hi");
+}
+
+// ── OpenRouterClient builder tests ─────────────────────────────────
+
+#[test]
+fn test_openrouter_builder_constructs() {
+    let client = OpenRouterClient::builder().api_key("test-key").build();
+
+    // Default model should be anthropic/claude-sonnet-4
+    assert_eq!(client.model(), "anthropic/claude-sonnet-4");
+}
+
+#[test]
+fn test_openrouter_builder_custom_model() {
+    let client = OpenRouterClient::builder()
+        .api_key("test-key")
+        .default_model("openai/gpt-4")
+        .build();
+
+    assert_eq!(client.model(), "openai/gpt-4");
+}
+
+#[test]
+fn test_openrouter_builder_custom_base_url() {
+    let client = OpenRouterClient::builder()
+        .api_key("test-key")
+        .base_url("http://localhost:8080")
+        .build();
+
+    // Should construct without panic; model retains default
+    assert_eq!(client.model(), "anthropic/claude-sonnet-4");
+}
+
+#[test]
+fn test_openrouter_builder_with_temperature() {
+    let client = OpenRouterClient::builder()
+        .api_key("test-key")
+        .default_temperature(0.3)
+        .build();
+
+    assert_eq!(client.default_temperature(), Some(0.3));
+}
+
+#[test]
+fn test_openrouter_builder_temperature_default_is_none() {
+    let client = OpenRouterClient::builder().api_key("test-key").build();
+
+    assert_eq!(client.default_temperature(), None);
+}

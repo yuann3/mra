@@ -798,3 +798,188 @@ async fn test_global_budget_exceeded_shuts_down_supervisor() {
         "supervisor should return Ok on budget shutdown"
     );
 }
+
+// --- Phase 1: API completeness tests ---
+
+#[tokio::test]
+async fn test_agent_handle_name() {
+    let (handle, join) = SupervisorHandle::start(SupervisorConfig::default());
+
+    let agent = handle.start_child(echo_spec("my-agent")).await.unwrap();
+    assert_eq!(agent.name(), "my-agent");
+
+    handle.shutdown().await;
+    let _ = join.await;
+}
+
+#[tokio::test]
+async fn test_list_children_empty() {
+    let (handle, join) = SupervisorHandle::start(SupervisorConfig::default());
+
+    let children = handle.list_children().await;
+    assert!(children.is_empty());
+
+    handle.shutdown().await;
+    let _ = join.await;
+}
+
+#[tokio::test]
+async fn test_list_children_returns_all() {
+    let (handle, join) = SupervisorHandle::start(SupervisorConfig::default());
+
+    handle.start_child(echo_spec("alice")).await.unwrap();
+    handle.start_child(echo_spec("bob")).await.unwrap();
+
+    let children = handle.list_children().await;
+    assert_eq!(children.len(), 2);
+
+    let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
+    assert!(names.contains(&"alice"));
+    assert!(names.contains(&"bob"));
+
+    // All should be alive with generation 0
+    for child in &children {
+        assert!(child.alive);
+        assert_eq!(child.generation, 0);
+        assert_eq!(child.restart_count, 0);
+    }
+
+    handle.shutdown().await;
+    let _ = join.await;
+}
+
+#[tokio::test]
+async fn test_child_status_found() {
+    let (handle, join) = SupervisorHandle::start(SupervisorConfig::default());
+
+    handle.start_child(echo_spec("worker")).await.unwrap();
+
+    let status = handle.child_status("worker").await;
+    assert!(status.is_some());
+    let status = status.unwrap();
+    assert_eq!(status.name, "worker");
+    assert!(status.alive);
+    assert_eq!(status.generation, 0);
+    assert_eq!(status.restart_count, 0);
+
+    handle.shutdown().await;
+    let _ = join.await;
+}
+
+#[tokio::test]
+async fn test_child_status_not_found() {
+    let (handle, join) = SupervisorHandle::start(SupervisorConfig::default());
+
+    let status = handle.child_status("nonexistent").await;
+    assert!(status.is_none());
+
+    handle.shutdown().await;
+    let _ = join.await;
+}
+
+#[tokio::test]
+async fn test_child_status_after_restart() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let start_count = Arc::new(AtomicU32::new(0));
+    let count = start_count.clone();
+
+    let spec = ChildSpec::new(
+        "crasher",
+        AgentConfig::new("crasher").with_restart_policy(mra::config::RestartPolicy {
+            max_restarts: 5,
+            window: Duration::from_secs(60),
+            backoff_base: Duration::from_millis(10),
+            backoff_max: Duration::from_millis(100),
+        }),
+        Arc::new(move |ctx: ChildContext| {
+            let count = count.clone();
+            Box::pin(async move {
+                let generation = ctx.generation;
+                count.fetch_add(1, Ordering::SeqCst);
+
+                if generation < 2 {
+                    Ok(SpawnedChild::from_future(Box::pin(async {
+                        ChildExit::Failed("crash".into())
+                    })))
+                } else {
+                    Ok(
+                        AgentSpawn::from_config(AgentConfig::new("crasher"), EchoBehavior)
+                            .id(ctx.id)
+                            .cancel(ctx.cancel)
+                            .peers(ctx.peers)
+                            .llm_opt(ctx.llm)
+                            .budget_opt(ctx.budget)
+                            .tools(ctx.tools)
+                            .spawn_child(),
+                    )
+                }
+            })
+                as Pin<
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
+                >
+        }),
+    );
+
+    let (handle, join) = SupervisorHandle::start(SupervisorConfig::default());
+    handle.start_child(spec).await.unwrap();
+
+    // Wait for restarts to settle (gen 0: crash, gen 1: crash, gen 2: stable)
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let status = handle.child_status("crasher").await.unwrap();
+    assert!(status.alive, "child should be alive after stabilizing");
+    assert_eq!(
+        status.generation, 2,
+        "child should be on generation 2 after two restarts"
+    );
+    assert!(
+        status.restart_count >= 2,
+        "restart_count should be at least 2, got {}",
+        status.restart_count
+    );
+
+    handle.shutdown().await;
+    let _ = join.await;
+}
+
+#[tokio::test]
+async fn test_list_children_shows_dead_child() {
+    let (handle, join) = SupervisorHandle::start(SupervisorConfig::default());
+
+    // Start a temporary child that crashes immediately (no restart)
+    let spec = ChildSpec::new(
+        "doomed",
+        AgentConfig::new("doomed"),
+        Arc::new(move |_ctx: ChildContext| {
+            Box::pin(async move {
+                Ok(SpawnedChild::from_future(Box::pin(async {
+                    ChildExit::Failed("crash".into())
+                })))
+            })
+                as Pin<
+                    Box<
+                        dyn Future<Output = Result<SpawnedChild, mra::error::SupervisorError>>
+                            + Send,
+                    >,
+                >
+        }),
+    )
+    .with_restart(ChildRestart::Temporary);
+
+    handle.start_child(spec).await.unwrap();
+
+    // Wait for the crash
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let children = handle.list_children().await;
+    let doomed = children.iter().find(|c| c.name == "doomed");
+    assert!(doomed.is_some(), "dead child should still appear in list");
+    assert!(!doomed.unwrap().alive, "dead child should not be alive");
+
+    handle.shutdown().await;
+    let _ = join.await;
+}

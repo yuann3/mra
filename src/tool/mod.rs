@@ -9,13 +9,13 @@ mod read_file;
 mod shell;
 
 pub use edit_file::EditFileTool;
-pub use read_file::ReadFileTool;
-pub use shell::ShellTool;
+pub use read_file::{ReadFileTool, ReadFileToolBuilder};
+pub use shell::{ShellTool, ShellToolBuilder};
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
@@ -81,7 +81,7 @@ pub trait Tool: Send + Sync + 'static {
 /// via [`AgentCtx::call_tool`](crate::agent::AgentCtx::call_tool).
 #[derive(Clone)]
 pub struct ToolRegistry {
-    tools: HashMap<String, Arc<dyn Tool>>,
+    tools: Arc<RwLock<HashMap<String, Arc<dyn Tool>>>>,
 }
 
 impl ToolRegistry {
@@ -93,39 +93,57 @@ impl ToolRegistry {
     /// use std::sync::Arc;
     /// use mra::tool::{ToolRegistry, ShellTool};
     ///
-    /// let mut registry = ToolRegistry::new();
+    /// let registry = ToolRegistry::new();
     /// registry.register(Arc::new(ShellTool::new())).unwrap();
     /// assert_eq!(registry.specs().len(), 1);
     /// ```
     pub fn new() -> Self {
         Self {
-            tools: HashMap::new(),
+            tools: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     /// Adds a tool. Returns an error if a tool with the same name is
     /// already registered.
-    pub fn register(&mut self, tool: Arc<dyn Tool>) -> Result<(), crate::error::ToolError> {
+    pub fn register(&self, tool: Arc<dyn Tool>) -> Result<(), crate::error::ToolError> {
         let name = tool.spec().name.clone();
-        if self.tools.contains_key(&name) {
+        let mut tools = self.tools.write().unwrap();
+        if tools.contains_key(&name) {
             return Err(crate::error::ToolError::InvalidArgs(format!(
                 "tool already registered: {name}"
             )));
         }
-        self.tools.insert(name, tool);
+        tools.insert(name, tool);
         Ok(())
     }
 
+    /// Removes a tool by name. Returns `true` if the tool was present.
+    pub fn unregister(&self, name: &str) -> bool {
+        self.tools.write().unwrap().remove(name).is_some()
+    }
+
+    /// Replaces an existing tool with a new one. Returns the old tool if
+    /// the name was found, or `None` if the name was not registered.
+    pub fn replace(&self, name: &str, tool: Arc<dyn Tool>) -> Option<Arc<dyn Tool>> {
+        let mut tools = self.tools.write().unwrap();
+        if tools.contains_key(name) {
+            tools.insert(name.to_string(), tool)
+        } else {
+            None
+        }
+    }
+
     /// Returns specs for all registered tools, sorted by name.
-    pub fn specs(&self) -> Vec<&ToolSpec> {
-        let mut specs: Vec<_> = self.tools.values().map(|t| t.spec()).collect();
+    pub fn specs(&self) -> Vec<ToolSpec> {
+        let tools = self.tools.read().unwrap();
+        let mut specs: Vec<_> = tools.values().map(|t| t.spec().clone()).collect();
         specs.sort_by(|a, b| a.name.cmp(&b.name));
         specs
     }
 
     /// Looks up a tool by name.
-    pub fn get(&self, name: &str) -> Option<&Arc<dyn Tool>> {
-        self.tools.get(name)
+    pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.tools.read().unwrap().get(name).cloned()
     }
 
     /// Looks up a tool by name and invokes it. Returns
