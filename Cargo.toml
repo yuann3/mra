@@ -30,10 +30,11 @@ toml = "0.8"
 schemars = "1"
 tempfile = "3.27.0"
 axum = { version = "0.8", optional = true }
+futures-util = { version = "0.3", optional = true }
 
 [features]
 default = []
-http = ["axum"]
+http = ["axum", "futures-util"]
 
 [[bin]]
 name = "demo"

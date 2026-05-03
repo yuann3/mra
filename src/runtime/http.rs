@@ -33,7 +33,9 @@ use axum::Router;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use axum::response::sse::{Event, Sse};
 use axum::routing::{delete, get, post};
+use futures_util::stream;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -91,12 +93,21 @@ fn err(status: StatusCode, msg: impl Into<String>) -> impl IntoResponse {
     (status, axum::Json(ErrorBody { error: msg.into() }))
 }
 
+fn wants_sse(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.contains("text/event-stream"))
+        .unwrap_or(false)
+}
+
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
 /// POST /agents/:name — new session
 async fn post_new_session(
     Path(name): Path<String>,
     State(state): State<HttpState>,
+    headers: axum::http::HeaderMap,
     axum::Json(body): axum::Json<PromptBody>,
 ) -> impl IntoResponse {
     let prompt = match body.prompt {
@@ -105,13 +116,14 @@ async fn post_new_session(
     };
 
     let session_id = Uuid::new_v4().to_string();
-    dispatch_and_respond(&state, &name, &prompt, Some(session_id)).await
+    dispatch_and_respond(&state, &name, &prompt, Some(session_id), wants_sse(&headers)).await
 }
 
 /// POST /agents/:name/:session_id — continue session
 async fn post_continue_session(
     Path((name, session_id)): Path<(String, String)>,
     State(state): State<HttpState>,
+    headers: axum::http::HeaderMap,
     axum::Json(body): axum::Json<PromptBody>,
 ) -> impl IntoResponse {
     let prompt = match body.prompt {
@@ -119,7 +131,7 @@ async fn post_continue_session(
         _ => return err(StatusCode::BAD_REQUEST, "missing or empty `prompt`").into_response(),
     };
 
-    dispatch_and_respond(&state, &name, &prompt, Some(session_id)).await
+    dispatch_and_respond(&state, &name, &prompt, Some(session_id), wants_sse(&headers)).await
 }
 
 /// GET /agents/:name/:session_id — fetch history
@@ -163,6 +175,7 @@ async fn dispatch_and_respond(
     agent_name: &str,
     prompt: &str,
     session_id: Option<String>,
+    sse: bool,
 ) -> axum::response::Response {
     match state
         .runtime
@@ -170,15 +183,40 @@ async fn dispatch_and_respond(
         .await
     {
         Ok(reply) => {
-            let body = AgentResponse {
-                session_id: session_id.unwrap_or_default(),
-                response: reply.output,
-                usage: UsageInfo {
-                    prompt_tokens: reply.self_tokens,
-                    completion_tokens: reply.total_tokens,
-                },
-            };
-            axum::Json(body).into_response()
+            let sid = session_id.unwrap_or_default();
+            if sse {
+                let token_data = serde_json::json!({
+                    "type": "token",
+                    "content": reply.output,
+                });
+                let done_data = serde_json::json!({
+                    "type": "done",
+                    "session_id": sid,
+                    "usage": {
+                        "prompt_tokens": reply.self_tokens,
+                        "completion_tokens": reply.total_tokens,
+                    },
+                });
+                let events = vec![
+                    Ok::<Event, std::convert::Infallible>(
+                        Event::default().data(token_data.to_string()),
+                    ),
+                    Ok::<Event, std::convert::Infallible>(
+                        Event::default().data(done_data.to_string()),
+                    ),
+                ];
+                Sse::new(stream::iter(events)).into_response()
+            } else {
+                let body = AgentResponse {
+                    session_id: sid,
+                    response: reply.output,
+                    usage: UsageInfo {
+                        prompt_tokens: reply.self_tokens,
+                        completion_tokens: reply.total_tokens,
+                    },
+                };
+                axum::Json(body).into_response()
+            }
         }
         Err(RuntimeError::UnknownAgent(_)) => {
             err(StatusCode::NOT_FOUND, format!("unknown agent: {agent_name}")).into_response()
@@ -396,5 +434,50 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn sse_post_new_session_returns_sse_stream() {
+        let (app, _store) = make_app().await;
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/agents/echo")
+            .header("content-type", "application/json")
+            .header("accept", "text/event-stream")
+            .body(Body::from(r#"{"prompt":"hello"}"#))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let body_str = std::str::from_utf8(&body).unwrap();
+        assert!(body_str.contains("\"type\":\"token\""), "body should contain token event");
+        assert!(body_str.contains("\"type\":\"done\""), "body should contain done event");
+    }
+
+    #[tokio::test]
+    async fn sse_content_type_is_event_stream() {
+        let (app, _store) = make_app().await;
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/agents/echo")
+            .header("content-type", "application/json")
+            .header("accept", "text/event-stream")
+            .body(Body::from(r#"{"prompt":"hello"}"#))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            content_type.contains("text/event-stream"),
+            "content-type should be text/event-stream, got: {content_type}"
+        );
     }
 }
