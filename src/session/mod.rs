@@ -1,11 +1,12 @@
 //! Session persistence for multi-turn agent conversations.
 //!
 //! [`SessionStore`] is the storage abstraction. [`MemorySessionStore`] is the
-//! in-process default used in CLI mode and tests. [`FileSessionStore`] (added
-//! in a subsequent issue) is the default for HTTP server mode.
+//! in-process default used in CLI mode and tests. [`FileSessionStore`] is the
+//! default for HTTP server mode, persisting one JSON file per session.
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -26,6 +27,9 @@ pub enum SessionError {
     /// A serialization or deserialization error.
     #[error("session serialization error: {0}")]
     Serialization(String),
+    /// An invalid session ID (e.g. contains path traversal characters).
+    #[error("invalid session ID: {0}")]
+    Invalid(String),
     /// Any other store-specific error.
     #[error("session store error: {0}")]
     Other(String),
@@ -173,6 +177,101 @@ impl SessionStore for MemorySessionStore {
     }
 }
 
+// ── FileSessionStore ──────────────────────────────────────────────────────────
+
+/// File-backed session store that persists one JSON file per session.
+///
+/// Each session is stored as `{dir}/{session_id}.json`, containing a JSON
+/// array of [`Message`] objects. Suitable for HTTP server mode where sessions
+/// must survive process restarts.
+///
+/// # Session ID safety
+///
+/// Session IDs are validated before use. IDs containing `/`, `\`, `..`, or
+/// null bytes are rejected with [`SessionError::Invalid`] to prevent path
+/// traversal attacks.
+pub struct FileSessionStore {
+    dir: PathBuf,
+}
+
+impl FileSessionStore {
+    /// Creates a new `FileSessionStore` rooted at `dir`.
+    ///
+    /// The directory need not exist yet; it will be created on the first
+    /// [`save`](SessionStore::save) call.
+    pub fn new(dir: impl AsRef<Path>) -> Self {
+        Self { dir: dir.as_ref().to_path_buf() }
+    }
+
+    /// Validates a session ID and returns the corresponding file path.
+    fn session_path(&self, session_id: &str) -> Result<PathBuf, SessionError> {
+        // Reject IDs containing dangerous characters or sequences.
+        if session_id.contains('/')
+            || session_id.contains('\\')
+            || session_id.contains("..")
+            || session_id.contains('\0')
+        {
+            return Err(SessionError::Invalid(format!(
+                "session_id {:?} contains forbidden characters",
+                session_id
+            )));
+        }
+        Ok(self.dir.join(format!("{session_id}.json")))
+    }
+}
+
+impl SessionStore for FileSessionStore {
+    fn load<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Message>, SessionError>> + Send + 'a>> {
+        Box::pin(async move {
+            let path = self.session_path(session_id)?;
+            match tokio::fs::read(&path).await {
+                Ok(bytes) => {
+                    let messages: Vec<Message> = serde_json::from_slice(&bytes)
+                        .map_err(|e| SessionError::Serialization(e.to_string()))?;
+                    Ok(messages)
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
+                Err(e) => Err(SessionError::Io(e)),
+            }
+        })
+    }
+
+    fn save<'a>(
+        &'a self,
+        session_id: &'a str,
+        history: &'a [Message],
+    ) -> Pin<Box<dyn Future<Output = Result<(), SessionError>> + Send + 'a>> {
+        Box::pin(async move {
+            let path = self.session_path(session_id)?;
+            // Ensure the directory exists.
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            let json = serde_json::to_vec(history)
+                .map_err(|e| SessionError::Serialization(e.to_string()))?;
+            tokio::fs::write(&path, &json).await?;
+            Ok(())
+        })
+    }
+
+    fn delete<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), SessionError>> + Send + 'a>> {
+        Box::pin(async move {
+            let path = self.session_path(session_id)?;
+            match tokio::fs::remove_file(&path).await {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(SessionError::Io(e)),
+            }
+        })
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -224,5 +323,68 @@ mod tests {
         assert!(matches!(cm.role, LlmRole::User));
         assert_eq!(cm.content, "test");
         assert!(cm.tool_calls.is_empty());
+    }
+
+    // ── FileSessionStore tests ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn file_store_save_and_load_round_trip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = FileSessionStore::new(dir.path());
+
+        let turns = vec![
+            msg(Role::User, "hello"),
+            msg(Role::Assistant, "hi"),
+        ];
+        store.save("sess1", &turns).await.unwrap();
+
+        let loaded = store.load("sess1").await.unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert!(matches!(loaded[0].role, Role::User));
+        assert_eq!(loaded[0].content, "hello");
+        assert!(matches!(loaded[1].role, Role::Assistant));
+        assert_eq!(loaded[1].content, "hi");
+    }
+
+    #[tokio::test]
+    async fn file_store_load_missing_session_returns_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = FileSessionStore::new(dir.path());
+
+        let result = store.load("nonexistent").await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn file_store_delete_removes_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = FileSessionStore::new(dir.path());
+
+        let turns = vec![msg(Role::User, "bye")];
+        store.save("to_delete", &turns).await.unwrap();
+
+        // Confirm it exists first
+        let before = store.load("to_delete").await.unwrap();
+        assert_eq!(before.len(), 1);
+
+        store.delete("to_delete").await.unwrap();
+
+        let after = store.load("to_delete").await.unwrap();
+        assert!(after.is_empty());
+
+        // Deleting again (already missing) should be a no-op
+        store.delete("to_delete").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn file_store_rejects_path_traversal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = FileSessionStore::new(dir.path());
+
+        let result = store.load("../evil").await;
+        assert!(matches!(result, Err(SessionError::Invalid(_))));
+
+        let result2 = store.save("../../etc/passwd", &[]).await;
+        assert!(matches!(result2, Err(SessionError::Invalid(_))));
     }
 }
