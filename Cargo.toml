@@ -28,18 +28,22 @@ reqwest = { version = "0.12", features = ["json"] }
 figment = { version = "0.10", features = ["toml", "env"] }
 toml = "0.8"
 schemars = "1"
-wasmtime = { version = "43", optional = true }
-wasmtime-wasi = { version = "43", optional = true }
-rayon = { version = "1", optional = true }
-num_cpus = { version = "1", optional = true }
+tempfile = "3.27.0"
 
 [features]
 default = []
-wasm = ["wasmtime", "wasmtime-wasi", "rayon", "num_cpus"]
+http = []
 
 [[bin]]
 name = "demo"
 path = "src/bin/demo.rs"
 
+[[bin]]
+name = "demo_supervisor"
+path = "src/bin/demo_supervisor.rs"
+
+[[bin]]
+name = "demo_tools"
+path = "src/bin/demo_tools.rs"
+
 [dev-dependencies]
-tempfile = "3.27.0"

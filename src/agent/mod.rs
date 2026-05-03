@@ -20,8 +20,11 @@ mod ctx;
 mod handle;
 pub(crate) mod mailbox;
 mod message;
-mod runner;
+pub(crate) mod runner;
 mod spawn;
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::error::AgentError;
 
@@ -77,4 +80,29 @@ pub trait AgentBehavior: Send + 'static {
         ctx: &mut AgentCtx,
         input: Task,
     ) -> impl Future<Output = Result<AgentReply, AgentError>> + Send;
+}
+
+// ── Type-erased behavior for Runtime storage ──────────────────────────────────
+
+/// Object-safe version of [`AgentBehavior`] using boxed futures.
+///
+/// Implemented automatically for all `AgentBehavior` types via a blanket impl.
+/// Provides a dyn-safe dispatch path so behaviors of different concrete types
+/// can be stored and invoked uniformly (e.g. in `AgentEntry` / `ErasedAgentRunner`).
+pub(crate) trait DynAgentBehavior: Send + 'static {
+    fn handle_dyn<'a>(
+        &'a mut self,
+        ctx: &'a mut AgentCtx,
+        input: Task,
+    ) -> Pin<Box<dyn Future<Output = Result<AgentReply, AgentError>> + Send + 'a>>;
+}
+
+impl<B: AgentBehavior> DynAgentBehavior for B {
+    fn handle_dyn<'a>(
+        &'a mut self,
+        ctx: &'a mut AgentCtx,
+        input: Task,
+    ) -> Pin<Box<dyn Future<Output = Result<AgentReply, AgentError>> + Send + 'a>> {
+        Box::pin(self.handle(ctx, input))
+    }
 }

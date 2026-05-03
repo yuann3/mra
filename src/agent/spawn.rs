@@ -18,7 +18,7 @@ use crate::tool::ToolRegistry;
 
 use super::AgentBehavior;
 use super::handle::AgentHandle;
-use super::runner::SpawnedAgent;
+use super::runner::{AgentInit, SpawnedAgent};
 
 /// Builder for spawning agents with sensible defaults.
 ///
@@ -38,6 +38,8 @@ pub struct AgentSpawn<B> {
     cancel: CancellationToken,
     budget: Option<Arc<BudgetTracker>>,
     tools: ToolRegistry,
+    /// Per-agent model override. `None` means use whatever is on `LlmRequest`.
+    model: Option<String>,
 }
 
 impl<B: AgentBehavior> AgentSpawn<B> {
@@ -80,6 +82,7 @@ impl<B: AgentBehavior> AgentSpawn<B> {
             cancel: CancellationToken::new(),
             budget: None,
             tools: ToolRegistry::new(),
+            model: None,
         }
     }
 
@@ -149,36 +152,45 @@ impl<B: AgentBehavior> AgentSpawn<B> {
         self
     }
 
+    /// Sets the per-agent model override.
+    ///
+    /// When set, `ctx.chat()` will use this model instead of whatever is on
+    /// the `LlmRequest`. Pass an OpenRouter-style `provider/model-name` string.
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    /// Sets the per-agent model override from an `Option`.
+    pub fn model_opt(mut self, model: Option<String>) -> Self {
+        self.model = model;
+        self
+    }
+
+    fn into_init(self) -> AgentInit<B> {
+        AgentInit {
+            id: self.id,
+            config: self.config,
+            behavior: self.behavior,
+            peers: self.peers,
+            llm: self.llm,
+            cancel: self.cancel,
+            budget: self.budget,
+            tools: self.tools,
+            model: self.model,
+        }
+    }
+
     /// Spawns the agent as an independent Tokio task.
-    #[allow(deprecated)]
     pub fn spawn(self) -> SpawnedAgent {
-        AgentHandle::spawn(
-            self.id,
-            self.config,
-            self.behavior,
-            self.peers,
-            self.llm,
-            self.cancel,
-            self.budget,
-            self.tools,
-        )
+        AgentHandle::spawn_with_init(self.into_init())
     }
 
     /// Creates the agent without spawning a Tokio task.
     ///
     /// Returns a [`SpawnedChild`] whose future the supervisor
     /// spawns via its own `JoinSet`.
-    #[allow(deprecated)]
     pub fn spawn_child(self) -> SpawnedChild {
-        AgentHandle::spawn_child(
-            self.id,
-            self.config,
-            self.behavior,
-            self.peers,
-            self.llm,
-            self.cancel,
-            self.budget,
-            self.tools,
-        )
+        AgentHandle::spawn_child_with_init(self.into_init())
     }
 }
