@@ -41,6 +41,7 @@
 mod cli;
 #[cfg(feature = "http")]
 mod http;
+pub(crate) mod roles;
 
 use std::sync::Arc;
 
@@ -147,6 +148,7 @@ pub struct RuntimeBuilder {
     session_store: Option<Arc<dyn SessionStore>>,
     budget: Option<Arc<BudgetTracker>>,
     port: u16,
+    roles_dir: Option<std::path::PathBuf>,
 }
 
 impl RuntimeBuilder {
@@ -158,6 +160,7 @@ impl RuntimeBuilder {
             session_store: None,
             budget: None,
             port: 3000,
+            roles_dir: None,
         }
     }
 
@@ -197,10 +200,21 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Sets the directory from which roles are loaded. Defaults to `.mra/roles`.
+    ///
+    /// Each `.md` file in the directory becomes a named role whose system prompt
+    /// is the file's content. The filename stem (without `.md`) is the role name.
+    pub fn roles_dir(mut self, dir: impl AsRef<std::path::Path>) -> Self {
+        self.roles_dir = Some(dir.as_ref().to_path_buf());
+        self
+    }
+
     /// Builds the [`Runtime`], starting the supervisor and spawning all agents.
     pub async fn build(self) -> Result<Runtime, RuntimeError> {
         let llm: Option<Arc<dyn LlmProvider>> = self.llm;
         let budget = self.budget;
+        let roles_dir = self.roles_dir.unwrap_or_else(|| std::path::PathBuf::from(".mra/roles"));
+        let role_registry = crate::runtime::roles::RoleRegistry::load_from_dir(&roles_dir);
 
         let mut sup_builder = SupervisorConfig::builder();
         if let Some(ref l) = llm {
@@ -232,12 +246,14 @@ impl RuntimeBuilder {
             let cfg_clone = cfg.clone();
             let model_clone = effective_model.clone();
             let llm_clone = llm.clone();
+            let role_registry_clone = role_registry.clone();
 
             let factory: crate::supervisor::ChildFactory = Arc::new(move |ctx: ChildContext| {
                 let slot = Arc::clone(&behavior_slot);
                 let cfg = cfg_clone.clone();
                 let model = model_clone.clone();
                 let effective_llm = llm_clone.clone().or(ctx.llm);
+                let registry = role_registry_clone.clone();
                 Box::pin(async move {
                     let behavior = slot.lock().await.take().ok_or_else(|| {
                         SupervisorError::SpawnFailed(
@@ -255,6 +271,7 @@ impl RuntimeBuilder {
                         budget: ctx.budget,
                         tools: ctx.tools,
                         model,
+                        role_registry: registry,
                     });
                     Ok(child)
                 }) as std::pin::Pin<
@@ -278,6 +295,7 @@ impl RuntimeBuilder {
             session_store: self.session_store,
             budget,
             port: self.port,
+            role_registry,
         })
     }
 }
@@ -294,6 +312,8 @@ pub struct Runtime {
     session_store: Option<Arc<dyn SessionStore>>,
     budget: Option<Arc<BudgetTracker>>,
     port: u16,
+    #[allow(dead_code)]
+    pub(crate) role_registry: crate::runtime::roles::RoleRegistry,
 }
 
 impl Runtime {

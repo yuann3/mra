@@ -71,12 +71,52 @@ pub struct AgentCtx {
     pub(crate) session_id: Option<String>,
     /// Session store for persisting history. `None` for stateless one-shot calls.
     pub(crate) session_store: Option<Arc<dyn SessionStore>>,
+    /// Role registry for system prompt overlays. Populated at runtime build time.
+    pub(crate) role_registry: crate::runtime::roles::RoleRegistry,
 }
 
 impl AgentCtx {
     /// Returns `true` if this agent has an LLM provider configured.
     pub fn has_llm(&self) -> bool {
         self.llm.is_some()
+    }
+
+    /// Prepends the named role's system prompt as a System message before the
+    /// user message(s) in a single `chat()` call.
+    ///
+    /// The injected System message is **not** persisted to session history —
+    /// it only affects the request passed to `chat()` for this one call.
+    ///
+    /// Returns `None` if the role name is not found in the registry.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use mra::agent::AgentCtx;
+    /// # use mra::llm::LlmRequest;
+    /// # async fn example(ctx: &mut AgentCtx, req: &LlmRequest) -> Result<(), mra::error::AgentError> {
+    /// if let Some(req_with_role) = ctx.with_role("analyst", req) {
+    ///     let _response = ctx.chat(&req_with_role).await?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_role(&self, role_name: &str, request: &LlmRequest) -> Option<LlmRequest> {
+        let role = self.role_registry.get(role_name)?;
+        let mut messages = vec![ChatMessage {
+            role: Role::System,
+            content: role.system_prompt.clone(),
+            tool_calls: vec![],
+            tool_call_id: None,
+        }];
+        messages.extend_from_slice(&request.messages);
+        Some(LlmRequest {
+            model: request.model.clone(),
+            messages,
+            temperature: request.temperature,
+            max_tokens: request.max_tokens,
+            tools: request.tools.clone(),
+        })
     }
 
     /// Reports progress to the supervisor, resetting the hang-detection timer.
@@ -265,5 +305,108 @@ impl AgentCtx {
         Err(AgentError::HandlerFailed(
             "chat_with_tools called with max_iterations = 0".into(),
         ))
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use tokio::sync::watch;
+
+    use crate::llm::{ChatMessage, LlmRequest, Role};
+    use crate::runtime::roles::RoleRegistry;
+    use crate::tool::ToolRegistry;
+
+    use super::AgentCtx;
+    use super::super::runner::ProgressState;
+
+    fn make_ctx_with_registry(registry: RoleRegistry) -> AgentCtx {
+        let (progress_tx, _) = watch::channel(ProgressState::idle_now());
+        AgentCtx {
+            id: crate::ids::AgentId::new(),
+            name: "test-agent".to_string(),
+            peers: HashMap::new(),
+            llm: None,
+            budget: None,
+            progress_tx,
+            tools: ToolRegistry::new(),
+            model: None,
+            history: Vec::new(),
+            session_id: None,
+            session_store: None,
+            role_registry: registry,
+        }
+    }
+
+    #[test]
+    fn with_role_prepends_system_message() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("test.md"), "You are a helpful test assistant.").unwrap();
+        let registry = RoleRegistry::load_from_dir(dir.path());
+
+        let ctx = make_ctx_with_registry(registry);
+
+        let req = LlmRequest::builder()
+            .message(ChatMessage {
+                role: Role::User,
+                content: "Hello!".to_string(),
+                tool_calls: vec![],
+                tool_call_id: None,
+            })
+            .build();
+
+        let result = ctx.with_role("test", &req).expect("role 'test' should exist");
+
+        assert_eq!(result.messages.len(), 2, "should have system + user message");
+        assert!(matches!(result.messages[0].role, Role::System));
+        assert!(result.messages[0].content.contains("helpful test assistant"));
+        assert!(matches!(result.messages[1].role, Role::User));
+        assert_eq!(result.messages[1].content, "Hello!");
+    }
+
+    #[test]
+    fn with_role_missing_returns_none() {
+        let ctx = make_ctx_with_registry(RoleRegistry::new());
+
+        let req = LlmRequest::builder()
+            .message(ChatMessage {
+                role: Role::User,
+                content: "Hi".to_string(),
+                tool_calls: vec![],
+                tool_call_id: None,
+            })
+            .build();
+
+        assert!(ctx.with_role("nonexistent", &req).is_none());
+    }
+
+    #[test]
+    fn with_role_preserves_request_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("coder.md"), "You are an expert coder.").unwrap();
+        let registry = RoleRegistry::load_from_dir(dir.path());
+
+        let ctx = make_ctx_with_registry(registry);
+
+        let req = LlmRequest::builder()
+            .message(ChatMessage {
+                role: Role::User,
+                content: "Write code".to_string(),
+                tool_calls: vec![],
+                tool_call_id: None,
+            })
+            .model("test-model")
+            .temperature(0.5)
+            .max_tokens(256)
+            .build();
+
+        let result = ctx.with_role("coder", &req).unwrap();
+
+        assert_eq!(result.model.as_deref(), Some("test-model"));
+        assert_eq!(result.temperature, Some(0.5));
+        assert_eq!(result.max_tokens, Some(256));
     }
 }

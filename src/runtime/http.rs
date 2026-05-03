@@ -57,6 +57,11 @@ pub(crate) struct HttpState {
 #[derive(Deserialize)]
 struct PromptBody {
     prompt: Option<String>,
+    /// Optional role name to inject as a system prompt overlay.
+    /// The named role must exist in `.mra/roles/<role>.md`.
+    /// Accepted and forwarded; actual injection happens inside `AgentBehavior`.
+    #[allow(dead_code)]
+    role: Option<String>,
 }
 
 #[derive(Serialize)]

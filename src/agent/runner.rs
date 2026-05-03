@@ -82,6 +82,8 @@ pub(crate) struct AgentInit<B: AgentBehavior> {
     pub tools: ToolRegistry,
     /// Per-agent model override. `None` → use whatever model is on the request.
     pub model: Option<String>,
+    /// Role registry for system prompt overlays.
+    pub role_registry: crate::runtime::roles::RoleRegistry,
 }
 
 fn prepare_agent<B: AgentBehavior>(init: AgentInit<B>) -> PreparedAgent<B> {
@@ -101,6 +103,7 @@ fn prepare_agent<B: AgentBehavior>(init: AgentInit<B>) -> PreparedAgent<B> {
         history: Vec::new(),
         session_id: None,
         session_store: None,
+        role_registry: init.role_registry,
     };
 
     PreparedAgent {
@@ -259,6 +262,7 @@ impl AgentHandle {
             budget,
             tools,
             model: None,
+            role_registry: crate::runtime::roles::RoleRegistry::new(),
         });
         let handle = AgentHandle::new(name, id, prepared.mailbox, cancel);
         let join = tokio::spawn(prepared.runner.run());
@@ -297,6 +301,7 @@ impl AgentHandle {
             budget,
             tools,
             model: None,
+            role_registry: crate::runtime::roles::RoleRegistry::new(),
         });
 
         SpawnedChild {
@@ -352,6 +357,7 @@ impl AgentHandle {
             history: Vec::new(),
             session_id: None,
             session_store: None,
+            role_registry: init.role_registry,
         };
 
         let runner = ErasedAgentRunner {
@@ -382,6 +388,8 @@ pub(crate) struct ErasedAgentInit {
     pub budget: Option<Arc<BudgetTracker>>,
     pub tools: ToolRegistry,
     pub model: Option<String>,
+    /// Role registry for system prompt overlays.
+    pub role_registry: crate::runtime::roles::RoleRegistry,
 }
 
 /// An agent runner that dispatches via `DynAgentBehavior::handle_dyn`.

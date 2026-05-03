@@ -178,6 +178,7 @@ impl<B: AgentBehavior> AgentSpawn<B> {
             budget: self.budget,
             tools: self.tools,
             model: self.model,
+            role_registry: crate::runtime::roles::RoleRegistry::new(),
         }
     }
 
