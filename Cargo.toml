@@ -29,10 +29,11 @@ figment = { version = "0.10", features = ["toml", "env"] }
 toml = "0.8"
 schemars = "1"
 tempfile = "3.27.0"
+axum = { version = "0.8", optional = true }
 
 [features]
 default = []
-http = []
+http = ["axum"]
 
 [[bin]]
 name = "demo"
@@ -47,3 +48,4 @@ name = "demo_tools"
 path = "src/bin/demo_tools.rs"
 
 [dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

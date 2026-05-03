@@ -39,6 +39,8 @@
 //! ```
 
 mod cli;
+#[cfg(feature = "http")]
+mod http;
 
 use std::sync::Arc;
 
@@ -312,16 +314,24 @@ impl Runtime {
         let args: Vec<String> = std::env::args().collect();
         match args.get(1).map(String::as_str) {
             Some("serve") => {
-                let _port = if args.get(2).is_some_and(|a| a == "--port") {
+                let port = if args.get(2).is_some_and(|a| a == "--port") {
                     args.get(3)
                         .and_then(|p| p.parse::<u16>().ok())
                         .unwrap_or(self.port)
                 } else {
                     self.port
                 };
-                Err(RuntimeError::Usage(
-                    "HTTP server mode requires the `http` feature flag".into(),
-                ))
+                #[cfg(feature = "http")]
+                {
+                    http::run_http(self, port).await
+                }
+                #[cfg(not(feature = "http"))]
+                {
+                    let _ = port;
+                    Err(RuntimeError::Usage(
+                        "HTTP server mode requires the `http` feature flag".into(),
+                    ))
+                }
             }
             Some(name) => {
                 let prompt = args
