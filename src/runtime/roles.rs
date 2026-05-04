@@ -30,11 +30,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-/// A loaded role — its name and Markdown system prompt content.
+/// A loaded role — its Markdown system prompt content.
 #[derive(Clone, Debug)]
 pub struct Role {
-    /// The stem of the `.md` filename (e.g. `"analyst"` for `analyst.md`).
-    pub name: String,
     /// The full Markdown content used as the System message.
     pub system_prompt: String,
 }
@@ -83,13 +81,7 @@ impl RoleRegistry {
                 Err(_) => continue,
             };
 
-            registry.roles.insert(
-                name.clone(),
-                Role {
-                    name,
-                    system_prompt,
-                },
-            );
+            registry.roles.insert(name, Role { system_prompt });
         }
 
         registry
@@ -127,7 +119,6 @@ mod tests {
         let role = registry
             .get("analyst")
             .expect("analyst role should be found");
-        assert_eq!(role.name, "analyst");
         assert!(role.system_prompt.contains("financial analyst"));
     }
 

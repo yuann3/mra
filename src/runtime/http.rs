@@ -202,14 +202,14 @@ async fn dispatch_and_respond(
     sse: bool,
 ) -> axum::response::Response {
     // Validate role exists in registry before dispatching.
-    if let Some(ref role_name) = role {
-        if state.runtime.role_registry.get(role_name).is_none() {
-            return err(
-                StatusCode::BAD_REQUEST,
-                format!("unknown role: {role_name}"),
-            )
-            .into_response();
-        }
+    if let Some(ref role_name) = role
+        && state.runtime.role_registry.get(role_name).is_none()
+    {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!("unknown role: {role_name}"),
+        )
+        .into_response();
     }
 
     match state

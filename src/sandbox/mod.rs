@@ -263,11 +263,11 @@ impl Sandbox for VirtualSandbox {
                 .spawn()?;
 
             // Write stdin if provided.
-            if let Some(input) = opts.stdin {
-                if let Some(mut stdin_handle) = child.stdin.take() {
-                    stdin_handle.write_all(input.as_bytes()).await?;
-                    // Drop closes the pipe, signalling EOF to the child.
-                }
+            if let Some(input) = opts.stdin
+                && let Some(mut stdin_handle) = child.stdin.take()
+            {
+                stdin_handle.write_all(input.as_bytes()).await?;
+                // Drop closes the pipe, signalling EOF to the child.
             }
 
             let output = child.wait_with_output().await?;
