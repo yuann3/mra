@@ -61,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
             .base_url(&config.llm.base_url)
             .default_model(&config.llm.model)
             .build())
+        .tools(tools)
         .roles_dir(".mra/roles")
         .build().await?
         .run().await?;

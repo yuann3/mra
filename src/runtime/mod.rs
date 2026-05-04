@@ -147,6 +147,7 @@ pub struct RuntimeBuilder {
     llm: Option<Arc<dyn LlmProvider>>,
     session_store: Option<Arc<dyn SessionStore>>,
     budget: Option<Arc<BudgetTracker>>,
+    tools: Option<crate::tool::ToolRegistry>,
     port: u16,
     roles_dir: Option<std::path::PathBuf>,
 }
@@ -159,6 +160,7 @@ impl RuntimeBuilder {
             llm: None,
             session_store: None,
             budget: None,
+            tools: None,
             port: 3000,
             roles_dir: None,
         }
@@ -200,6 +202,12 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Sets the shared tool registry available to all agents.
+    pub fn tools(mut self, tools: crate::tool::ToolRegistry) -> Self {
+        self.tools = Some(tools);
+        self
+    }
+
     /// Sets the directory from which roles are loaded. Defaults to `.mra/roles`.
     ///
     /// Each `.md` file in the directory becomes a named role whose system prompt
@@ -222,6 +230,9 @@ impl RuntimeBuilder {
         }
         if let Some(ref b) = budget {
             sup_builder = sup_builder.budget(Arc::clone(b));
+        }
+        if let Some(tools) = self.tools {
+            sup_builder = sup_builder.tools(tools);
         }
         let sup_config = sup_builder.build();
 
