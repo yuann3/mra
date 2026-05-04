@@ -42,12 +42,8 @@ name = "demo"
 path = "src/bin/demo.rs"
 
 [[bin]]
-name = "demo_supervisor"
-path = "src/bin/demo_supervisor.rs"
-
-[[bin]]
-name = "demo_tools"
-path = "src/bin/demo_tools.rs"
+name = "demo_agent"
+path = "src/bin/demo_agent.rs"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

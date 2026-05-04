@@ -2,3 +2,4 @@
 /docs/plans/
 mra.toml
 /04-tokio-multi-agent-swarm.org
+/.agent-shell/
