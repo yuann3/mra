@@ -254,7 +254,10 @@ impl SessionStore for FileSessionStore {
             }
             let json = serde_json::to_vec(history)
                 .map_err(|e| SessionError::Serialization(e.to_string()))?;
-            tokio::fs::write(&path, &json).await?;
+            // Write to a temp file, then atomically rename.
+            let tmp_path = path.with_extension("json.tmp");
+            tokio::fs::write(&tmp_path, &json).await?;
+            tokio::fs::rename(&tmp_path, &path).await?;
             Ok(())
         })
     }

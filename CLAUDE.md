@@ -7,10 +7,9 @@ Tokio-native Rust framework for building resilient, multi-agent LLM applications
 ```bash
 cargo build
 cargo test
-cargo run --bin demo "your topic"          # research pipeline demo (needs MRA_LLM__API_KEY)
-cargo run --bin demo_supervisor            # supervision + budget demo (mock LLM, no key needed)
-cargo run --bin demo_tools                 # tool invocation demo
-cargo build --features wasm               # enable WASM-sandboxed tools
+cargo build --features http               # enable HTTP trigger with Axum
+cargo run --bin demo researcher "topic"   # research pipeline demo (needs MRA_LLM__API_KEY)
+cargo run --bin demo_agent coder "task"   # coding agent demo with tools
 ```
 
 Set `MRA_LLM__API_KEY=<openrouter-key>` or add to `mra.toml` (see `mra.example.toml`).
@@ -34,7 +33,7 @@ Runtime (entry point)
 |--------|---------|
 | `agent/` | Actor model: `AgentBehavior`, `AgentHandle`, `AgentCtx`, `AgentSpawn` |
 | `supervisor/` | Supervision tree, restart policies, hang detection, event streaming |
-| `runtime.rs` | `SwarmRuntime` — top-level entry point (being replaced by `Runtime` builder) |
+| `runtime/` | `Runtime` builder — top-level entry point, HTTP/CLI triggers, session dispatch |
 | `llm/` | `LlmProvider` trait, `OpenRouterClient` |
 | `tool/` | `Tool` trait, `ToolRegistry`, built-in tools (`ShellTool`, `ReadFileTool`, `EditFileTool`) |
 | `budget.rs` | `BudgetTracker` — atomic per-agent and global token limits |

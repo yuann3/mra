@@ -36,11 +36,12 @@ async fn test_runtime_spawn_and_execute() {
 
 #[tokio::test]
 async fn test_runtime_shutdown_completes() {
-    let (supervisor, _join) = SupervisorHandle::start(SupervisorConfig::default());
+    let (supervisor, join) = SupervisorHandle::start(SupervisorConfig::default());
     supervisor.start_child(echo_spec("a")).await.unwrap();
     supervisor.start_child(echo_spec("b")).await.unwrap();
 
-    let result = tokio::time::timeout(Duration::from_secs(5), supervisor.shutdown()).await;
+    supervisor.shutdown().await;
+    let result = tokio::time::timeout(Duration::from_secs(5), join).await;
     assert!(result.is_ok(), "shutdown should complete within timeout");
 }
 
