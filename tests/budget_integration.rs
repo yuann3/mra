@@ -3,11 +3,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use mra::agent::{AgentBehavior, AgentCtx, AgentReply, AgentSpawn, Task};
+use mra::budget::BudgetTracker;
 use mra::config::AgentConfig;
 use mra::error::AgentError;
 use mra::llm::{ChatMessage, LlmProvider, LlmRequest, LlmResponse, Role};
-use mra::runtime::SwarmRuntime;
-use mra::supervisor::{ChildContext, ChildRestart, ChildSpec, SpawnedChild, SupervisorConfig};
+use mra::supervisor::{
+    ChildContext, ChildRestart, ChildSpec, SpawnedChild, SupervisorConfig, SupervisorHandle,
+};
 
 /// Mock LLM that returns a fixed number of tokens per call.
 struct MockLlm(u64);
@@ -91,11 +93,20 @@ fn test_spec(name: &str, llm: Arc<dyn LlmProvider>) -> ChildSpec {
 async fn test_budget_kill_switch() {
     let llm: Arc<dyn LlmProvider> = Arc::new(MockLlm(100)); // 100 tokens per call
 
-    let runtime = SwarmRuntime::with_budget(SupervisorConfig::default(), 250);
+    let budget = Arc::new(
+        BudgetTracker::builder()
+            .global_limit(250)
+            .build_unconnected(),
+    );
+    let (supervisor, _join) =
+        SupervisorHandle::start_with_budget(SupervisorConfig::default(), Some(budget.clone()));
 
-    runtime.spawn(test_spec("agent", llm)).await.unwrap();
+    supervisor
+        .start_child(test_spec("agent", llm))
+        .await
+        .unwrap();
 
-    let handle = runtime.get_handle_by_name("agent").await.unwrap();
+    let handle = supervisor.child("agent").await.unwrap();
 
     // First call: 100 tokens — under budget
     let r1 = handle.execute(Task::new("call1")).await;
@@ -113,24 +124,30 @@ async fn test_budget_kill_switch() {
     );
 
     // Verify usage
-    let usage = runtime.token_usage().unwrap();
+    let usage = budget.run_usage();
     assert!(usage.used >= 250, "global usage should be >= 250");
 
-    runtime.shutdown().await;
+    supervisor.shutdown().await;
 }
 
 #[tokio::test]
 async fn test_per_agent_budget_limit() {
     let llm: Arc<dyn LlmProvider> = Arc::new(MockLlm(100));
 
-    let runtime = SwarmRuntime::with_budget(SupervisorConfig::default(), 50_000);
+    let budget = Arc::new(
+        BudgetTracker::builder()
+            .global_limit(50_000)
+            .build_unconnected(),
+    );
+    let (supervisor, _join) =
+        SupervisorHandle::start_with_budget(SupervisorConfig::default(), Some(budget.clone()));
 
-    runtime
-        .spawn(test_spec("agent", llm).with_token_budget(150))
+    supervisor
+        .start_child(test_spec("agent", llm).with_token_budget(150))
         .await
         .unwrap();
 
-    let handle = runtime.get_handle_by_name("agent").await.unwrap();
+    let handle = supervisor.child("agent").await.unwrap();
 
     // First call: 100 tokens — under per-agent limit of 150
     let r1 = handle.execute(Task::new("call1")).await;
@@ -141,14 +158,14 @@ async fn test_per_agent_budget_limit() {
     assert!(matches!(r2, Err(AgentError::BudgetExceeded)));
 
     // Global usage should still show 200 (both calls charged)
-    let usage = runtime.token_usage().unwrap();
+    let usage = budget.run_usage();
     assert_eq!(usage.used, 200);
 
     // Per-agent usage
-    let agent_usage = runtime.agent_token_usage("agent").unwrap();
+    let agent_usage = budget.agent_usage("agent").unwrap();
     assert_eq!(agent_usage.used, 200);
 
-    runtime.shutdown().await;
+    supervisor.shutdown().await;
 }
 
 /// Verifies that supervisor-level LLM injection flows through to children
@@ -158,7 +175,7 @@ async fn test_supervisor_level_llm_chat_works_via_from_behavior() {
     let llm: Arc<dyn LlmProvider> = Arc::new(MockLlm(100));
 
     let config = SupervisorConfig::default().with_llm(llm);
-    let (supervisor, _join) = mra::supervisor::SupervisorHandle::start(config);
+    let (supervisor, _join) = SupervisorHandle::start(config);
 
     // from_behavior child — no manual LLM wiring needed
     let spec = ChildSpec::from_behavior(AgentConfig::new("writer"), |_ctx| SimpleBehavior);
@@ -235,7 +252,7 @@ async fn test_supervisor_level_tools_available_in_child() {
     let found_tool2 = found_tool.clone();
 
     let config = SupervisorConfig::default().with_tools(tools);
-    let (supervisor, _join) = mra::supervisor::SupervisorHandle::start(config);
+    let (supervisor, _join) = SupervisorHandle::start(config);
 
     let spec = ChildSpec::from_behavior(AgentConfig::new("tool-user"), move |_ctx| {
         ToolCheckBehavior {
@@ -259,11 +276,14 @@ async fn test_supervisor_level_tools_available_in_child() {
 async fn test_no_budget_means_unlimited() {
     let llm: Arc<dyn LlmProvider> = Arc::new(MockLlm(100));
 
-    let runtime = SwarmRuntime::new(SupervisorConfig::default());
+    let (supervisor, _join) = SupervisorHandle::start(SupervisorConfig::default());
 
-    runtime.spawn(test_spec("agent", llm)).await.unwrap();
+    supervisor
+        .start_child(test_spec("agent", llm))
+        .await
+        .unwrap();
 
-    let handle = runtime.get_handle_by_name("agent").await.unwrap();
+    let handle = supervisor.child("agent").await.unwrap();
 
     // Should work fine without any budget
     for i in 0..10 {
@@ -271,8 +291,5 @@ async fn test_no_budget_means_unlimited() {
         assert!(result.is_ok(), "call {i} should succeed without budget");
     }
 
-    // No budget configured
-    assert!(runtime.token_usage().is_none());
-
-    runtime.shutdown().await;
+    supervisor.shutdown().await;
 }

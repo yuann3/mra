@@ -60,6 +60,38 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
 }
 
+impl ChatMessage {
+    /// Creates a system message.
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: Role::System,
+            content: content.into(),
+            tool_calls: vec![],
+            tool_call_id: None,
+        }
+    }
+
+    /// Creates a user message.
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: Role::User,
+            content: content.into(),
+            tool_calls: vec![],
+            tool_call_id: None,
+        }
+    }
+
+    /// Creates an assistant message.
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: content.into(),
+            tool_calls: vec![],
+            tool_call_id: None,
+        }
+    }
+}
+
 /// Request payload for an LLM chat completion.
 ///
 /// `model` is optional — if `None`, the provider uses its configured default.
@@ -113,6 +145,16 @@ impl LlmRequestBuilder {
     pub fn message(mut self, message: ChatMessage) -> Self {
         self.messages.push(message);
         self
+    }
+
+    /// Appends a system message.
+    pub fn system(self, content: impl Into<String>) -> Self {
+        self.message(ChatMessage::system(content))
+    }
+
+    /// Appends a user message.
+    pub fn user(self, content: impl Into<String>) -> Self {
+        self.message(ChatMessage::user(content))
     }
 
     /// Sets the model identifier (overrides provider default).
@@ -171,6 +213,36 @@ impl LlmResponse {
     }
 }
 
+/// A simple `Stream` adapter over a `Vec` iterator. Used by the default
+/// `chat_stream` implementation to avoid pulling in extra crates.
+struct VecStream<I: Iterator + Unpin + Send> {
+    items: I,
+}
+
+impl<I: Iterator + Unpin + Send> futures_core::Stream for VecStream<I> {
+    type Item = I::Item;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::task::Poll::Ready(self.items.next())
+    }
+}
+
+/// A single chunk from a streaming LLM response.
+#[derive(Debug, Clone)]
+pub enum StreamChunk {
+    /// A text delta — a partial token from the LLM.
+    Delta(String),
+    /// The final message with complete token usage.
+    Done(LlmResponse),
+}
+
+/// Boxed stream of [`StreamChunk`]s for object-safe streaming.
+pub type LlmStream =
+    Pin<Box<dyn futures_core::Stream<Item = Result<StreamChunk, LlmError>> + Send>>;
+
 /// Trait for LLM provider implementations.
 ///
 /// Returns `Pin<Box<dyn Future>>` for dyn-safety — allows `Arc<dyn LlmProvider>`.
@@ -181,4 +253,28 @@ pub trait LlmProvider: Send + Sync + 'static {
         &'a self,
         request: &'a LlmRequest,
     ) -> Pin<Box<dyn Future<Output = Result<LlmResponse, LlmError>> + Send + 'a>>;
+
+    /// Sends a chat completion request and returns a stream of chunks.
+    ///
+    /// The default implementation calls [`chat()`](Self::chat), waits for the
+    /// full response, then yields the content as a single [`StreamChunk::Delta`]
+    /// followed by [`StreamChunk::Done`].
+    ///
+    /// Providers that support native streaming (e.g. OpenRouter SSE) should
+    /// override this to yield incremental deltas.
+    fn chat_stream<'a>(
+        &'a self,
+        request: &'a LlmRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<LlmStream, LlmError>> + Send + 'a>> {
+        Box::pin(async move {
+            let response = self.chat(request).await?;
+            let items: Vec<Result<StreamChunk, LlmError>> = vec![
+                Ok(StreamChunk::Delta(response.content.clone())),
+                Ok(StreamChunk::Done(response)),
+            ];
+            Ok(Box::pin(VecStream {
+                items: items.into_iter(),
+            }) as LlmStream)
+        })
+    }
 }

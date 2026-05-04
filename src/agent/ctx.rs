@@ -15,6 +15,7 @@ use crate::budget::BudgetTracker;
 use crate::error::{AgentError, ToolError};
 use crate::ids::AgentId;
 use crate::llm::{ChatMessage, LlmProvider, LlmRequest, LlmResponse, Role};
+use crate::session::{Message, Role as SessionRole, SessionStore};
 use crate::tool::{ToolOutput, ToolRegistry};
 
 use super::handle::AgentHandle;
@@ -60,12 +61,66 @@ pub struct AgentCtx {
     pub(crate) progress_tx: watch::Sender<ProgressState>,
     /// Registered tools available to this agent.
     pub tools: ToolRegistry,
+    /// Per-agent model override resolved at spawn time.
+    /// `None` → use whatever model is set on the `LlmRequest`.
+    pub(crate) model: Option<String>,
+    /// Conversation history for the current session.
+    /// Loaded from the session store before each task and saved after each `chat()`.
+    pub(crate) history: Vec<Message>,
+    /// Session ID for the current task. `None` for stateless one-shot calls.
+    pub(crate) session_id: Option<String>,
+    /// Session store for persisting history. `None` for stateless one-shot calls.
+    pub(crate) session_store: Option<Arc<dyn SessionStore>>,
+    /// Role registry for system prompt overlays. Populated at runtime build time.
+    pub(crate) role_registry: crate::runtime::roles::RoleRegistry,
+    /// Active role for the current task. Set by the runner from `Task::role`.
+    /// When `Some`, `chat()` automatically calls `with_role()` to prepend the
+    /// system message. Cleared between tasks.
+    pub(crate) active_role: Option<String>,
 }
 
 impl AgentCtx {
     /// Returns `true` if this agent has an LLM provider configured.
     pub fn has_llm(&self) -> bool {
         self.llm.is_some()
+    }
+
+    /// Prepends the named role's system prompt as a System message before the
+    /// user message(s) in a single `chat()` call.
+    ///
+    /// The injected System message is **not** persisted to session history —
+    /// it only affects the request passed to `chat()` for this one call.
+    ///
+    /// Returns `None` if the role name is not found in the registry.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use mra::agent::AgentCtx;
+    /// # use mra::llm::LlmRequest;
+    /// # async fn example(ctx: &mut AgentCtx, req: &LlmRequest) -> Result<(), mra::error::AgentError> {
+    /// if let Some(req_with_role) = ctx.with_role("analyst", req) {
+    ///     let _response = ctx.chat(&req_with_role).await?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_role(&self, role_name: &str, request: &LlmRequest) -> Option<LlmRequest> {
+        let role = self.role_registry.get(role_name)?;
+        let mut messages = vec![ChatMessage {
+            role: Role::System,
+            content: role.system_prompt.clone(),
+            tool_calls: vec![],
+            tool_call_id: None,
+        }];
+        messages.extend_from_slice(&request.messages);
+        Some(LlmRequest {
+            model: request.model.clone(),
+            messages,
+            temperature: request.temperature,
+            max_tokens: request.max_tokens,
+            tools: request.tools.clone(),
+        })
     }
 
     /// Reports progress to the supervisor, resetting the hang-detection timer.
@@ -94,23 +149,54 @@ impl AgentCtx {
         }
     }
 
-    /// Call LLM with automatic budget enforcement.
+    /// Call LLM with automatic budget enforcement and session history management.
     ///
-    /// Pre-checks whether the budget has already been tripped before
-    /// calling the LLM, then charges this agent's direct token usage
-    /// against both per-agent and global budgets.
+    /// The full message list sent to the LLM is built as `history + request.messages`.
+    /// After a successful call, the user turn(s) from `request.messages` and the
+    /// assistant response are appended to the in-memory history and flushed to the
+    /// session store (if a `session_id` is set).
     ///
-    /// Returns `Err(AgentError::BudgetExceeded)` if the budget was
-    /// already tripped or if this call crosses a limit.
-    pub async fn chat(&self, request: &LlmRequest) -> Result<LlmResponse, AgentError> {
+    /// Pre-checks whether the budget has already been tripped before calling the LLM,
+    /// then charges this agent's direct token usage against both per-agent and global budgets.
+    ///
+    /// Returns `Err(AgentError::BudgetExceeded)` if the budget was already tripped
+    /// or if this call crosses a limit.
+    pub async fn chat(&mut self, request: &LlmRequest) -> Result<LlmResponse, AgentError> {
         if let Some(ref budget) = self.budget
             && budget.is_exceeded(&self.name)
         {
             return Err(AgentError::BudgetExceeded);
         }
 
+        // 1. Apply active role (if set) — inject system message before everything.
+        // The system message is NOT stored in session history.
+        let request = if let Some(ref role_name) = self.active_role {
+            match self.with_role(role_name, request) {
+                Some(req_with_role) => std::borrow::Cow::Owned(req_with_role),
+                None => std::borrow::Cow::Borrowed(request),
+            }
+        } else {
+            std::borrow::Cow::Borrowed(request)
+        };
+
+        // 2. Build full message list: history + request.messages
+        let mut full_messages: Vec<ChatMessage> =
+            self.history.iter().map(|m| m.to_chat_message()).collect();
+        full_messages.extend_from_slice(&request.messages);
+
+        // 3. Resolve model: per-agent override takes precedence over request.model
+        let effective_model = self.model.clone().or_else(|| request.model.clone());
+
+        let full_request = LlmRequest {
+            model: effective_model,
+            messages: full_messages,
+            temperature: request.temperature,
+            max_tokens: request.max_tokens,
+            tools: request.tools.clone(),
+        };
+
         let llm = self.llm.as_ref().ok_or(AgentError::LlmNotConfigured)?;
-        let chat_fut = llm.chat(request);
+        let chat_fut = llm.chat(&full_request);
         tokio::pin!(chat_fut);
         let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(1));
 
@@ -125,6 +211,34 @@ impl AgentCtx {
             budget.charge(&self.name, response.total_tokens())?;
         }
 
+        // 3. Append user turn(s) + assistant turn to history
+        for msg in &request.messages {
+            let session_role = match msg.role {
+                Role::User => Some(SessionRole::User),
+                Role::Assistant => Some(SessionRole::Assistant),
+                Role::System => Some(SessionRole::System),
+                Role::Tool => None, // tool round-trips are not persisted
+            };
+            if let Some(role) = session_role {
+                self.history.push(Message {
+                    role,
+                    content: msg.content.clone(),
+                });
+            }
+        }
+        self.history.push(Message {
+            role: SessionRole::Assistant,
+            content: response.content.clone(),
+        });
+
+        // 4. Flush to session store if session_id is set
+        if let (Some(session_id), Some(store)) = (&self.session_id, &self.session_store) {
+            store
+                .save(session_id, &self.history)
+                .await
+                .map_err(|e| AgentError::HandlerFailed(format!("session save failed: {e}")))?;
+        }
+
         Ok(response)
     }
 
@@ -135,12 +249,12 @@ impl AgentCtx {
     /// responds with plain text (no tool calls) or `max_iterations` LLM
     /// calls have been made -- whichever comes first.
     ///
-    /// Each LLM call goes through [`Self::chat()`], so budget enforcement
-    /// and heartbeats happen automatically. Tool execution errors are
-    /// caught and sent back to the LLM as error messages rather than
-    /// crashing the loop.
+    /// Each LLM call goes through [`Self::chat()`], so budget enforcement,
+    /// heartbeats, and history management happen automatically.
+    /// Tool execution errors are caught and sent back to the LLM as error
+    /// messages rather than crashing the loop.
     pub async fn chat_with_tools(
-        &self,
+        &mut self,
         request: &LlmRequest,
         max_iterations: usize,
     ) -> Result<ToolLoopResult, AgentError> {
@@ -207,5 +321,123 @@ impl AgentCtx {
         Err(AgentError::HandlerFailed(
             "chat_with_tools called with max_iterations = 0".into(),
         ))
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use tokio::sync::watch;
+
+    use crate::llm::{ChatMessage, LlmRequest, Role};
+    use crate::runtime::roles::RoleRegistry;
+    use crate::tool::ToolRegistry;
+
+    use super::super::runner::ProgressState;
+    use super::AgentCtx;
+
+    fn make_ctx_with_registry(registry: RoleRegistry) -> AgentCtx {
+        let (progress_tx, _) = watch::channel(ProgressState::idle_now());
+        AgentCtx {
+            id: crate::ids::AgentId::new(),
+            name: "test-agent".to_string(),
+            peers: HashMap::new(),
+            llm: None,
+            budget: None,
+            progress_tx,
+            tools: ToolRegistry::new(),
+            model: None,
+            history: Vec::new(),
+            session_id: None,
+            session_store: None,
+            role_registry: registry,
+            active_role: None,
+        }
+    }
+
+    #[test]
+    fn with_role_prepends_system_message() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("test.md"),
+            "You are a helpful test assistant.",
+        )
+        .unwrap();
+        let registry = RoleRegistry::load_from_dir(dir.path());
+
+        let ctx = make_ctx_with_registry(registry);
+
+        let req = LlmRequest::builder()
+            .message(ChatMessage {
+                role: Role::User,
+                content: "Hello!".to_string(),
+                tool_calls: vec![],
+                tool_call_id: None,
+            })
+            .build();
+
+        let result = ctx
+            .with_role("test", &req)
+            .expect("role 'test' should exist");
+
+        assert_eq!(
+            result.messages.len(),
+            2,
+            "should have system + user message"
+        );
+        assert!(matches!(result.messages[0].role, Role::System));
+        assert!(
+            result.messages[0]
+                .content
+                .contains("helpful test assistant")
+        );
+        assert!(matches!(result.messages[1].role, Role::User));
+        assert_eq!(result.messages[1].content, "Hello!");
+    }
+
+    #[test]
+    fn with_role_missing_returns_none() {
+        let ctx = make_ctx_with_registry(RoleRegistry::new());
+
+        let req = LlmRequest::builder()
+            .message(ChatMessage {
+                role: Role::User,
+                content: "Hi".to_string(),
+                tool_calls: vec![],
+                tool_call_id: None,
+            })
+            .build();
+
+        assert!(ctx.with_role("nonexistent", &req).is_none());
+    }
+
+    #[test]
+    fn with_role_preserves_request_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("coder.md"), "You are an expert coder.").unwrap();
+        let registry = RoleRegistry::load_from_dir(dir.path());
+
+        let ctx = make_ctx_with_registry(registry);
+
+        let req = LlmRequest::builder()
+            .message(ChatMessage {
+                role: Role::User,
+                content: "Write code".to_string(),
+                tool_calls: vec![],
+                tool_call_id: None,
+            })
+            .model("test-model")
+            .temperature(0.5)
+            .max_tokens(256)
+            .build();
+
+        let result = ctx.with_role("coder", &req).unwrap();
+
+        assert_eq!(result.model.as_deref(), Some("test-model"));
+        assert_eq!(result.temperature, Some(0.5));
+        assert_eq!(result.max_tokens, Some(256));
     }
 }

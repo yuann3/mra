@@ -5,62 +5,200 @@
 *WIP.* Don't depend on this yet.
 #+end_quote
 
-I wanted something lightweight that makes me happy. So here's a multi-agent runtime for Rust. Spawn AI agents as Tokio actors, wire them together, let them talk to LLMs.
+I wanted something lightweight that makes me happy.
+
+MRA is a framework for building headless, programmable AI agents that run as Tokio actors with built-in supervision, sessions, sandboxing, and tool use. write them together, and let them talk to LLMs. 
 
 * What is this?
 
 Each agent runs as its own async task with a bounded =mpsc= mailbox. Agents talk to each other through handles, call LLMs, and get restarted by a supervisor if they crash or stop responding. No shared mutable state.
 
-If you've used Erlang/OTP, this is that idea applied to LLM pipelines, in Rust.
+What you get out of the box:
+- =Runtime::builder()= -- one entry point, handles CLI and HTTP dispatch
+- Session persistence -- conversation history saved and replayed automatically
+- Per-agent model selection -- different agents can use different LLMs
+- Sandbox workspaces -- agents run in isolated temp directories with mounted host paths
+- Tools -- shell, file read, file edit, scoped to the sandbox
+- Roles -- load system prompts from =.mra/roles/*.md= files
+- SSE streaming -- =Accept: text/event-stream= on any agent endpoint
+- Supervision -- restarts, hang detection, budget enforcement
 
 * Quick look
 
-Spawn an agent in two lines:
+A three-agent pipeline in ~40 lines of actual code:
 
 #+begin_src rust
-use mra::agent::{AgentSpawn, Task};
+use mra::agent::{AgentBehavior, AgentCtx, AgentReply, Task};
+use mra::config::MraConfig;
+use mra::error::AgentError;
+use mra::llm::{LlmRequest, OpenRouterClient};
+use mra::runtime::{AgentEntry, Runtime};
 
-let spawned = AgentSpawn::new("writer", Writer).llm(llm).spawn();
-let reply = spawned.handle.execute(Task::new("write something")).await?;
-#+end_src
-
-=AgentSpawn= is a typed builder. You need a name and a behavior -- everything else (LLM, tools, budget, peers) defaults to empty/None. Chain setters for what you need, then call =.spawn()= for a standalone task or =.spawn_child()= for supervisor-managed agents.
-
-Here's a behavior that calls an LLM and delegates to a peer:
-
-#+begin_src rust
-struct Writer;
-
-impl AgentBehavior for Writer {
-    async fn handle(
-        &mut self,
-        ctx: &mut AgentCtx,
-        input: Task,
-    ) -> Result<AgentReply, AgentError> {
-        let response = ctx.chat(&LlmRequest {
-            model: None,
-            messages: vec![
-                ChatMessage { role: Role::System, content: "You are a writer.".into(), tool_calls: vec![], tool_call_id: None },
-                ChatMessage { role: Role::User, content: input.instruction, tool_calls: vec![], tool_call_id: None },
-            ],
-            temperature: Some(0.7),
-            max_tokens: Some(2048),
-            tools: None,
-        }).await?;
-
-        // The supervisor injects peer handles automatically
-        let editor = ctx.peers.get("editor").expect("editor peer");
-        let reply = editor.execute(Task::new(response.content)).await?;
-
-        Ok(AgentReply {
-            task_id: input.id,
-            output: reply.output,
-            self_tokens: response.total_tokens(),
-            total_tokens: response.total_tokens() + reply.total_tokens,
-        })
+struct Researcher;
+impl AgentBehavior for Researcher {
+    async fn handle(&mut self, ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
+        let resp = ctx.chat(&LlmRequest::builder()
+            .system("You are a research assistant. Produce concise notes.")
+            .user(&input.instruction)
+            .build()).await?;
+        let next = ctx.peers["writer"].execute(Task::new(&resp.content)).await?;
+        Ok(AgentReply { task_id: input.id, output: next.output,
+            self_tokens: resp.total_tokens(),
+            total_tokens: resp.total_tokens() + next.total_tokens })
     }
 }
+
+// Writer and Editor follow the same pattern...
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let config = MraConfig::load()?;
+    Runtime::builder()
+        .agent(AgentEntry::new("editor", Editor).model("anthropic/claude-haiku-4-5"))
+        .agent(AgentEntry::new("writer", Writer).model("anthropic/claude-sonnet-4"))
+        .agent(AgentEntry::new("researcher", Researcher).model("anthropic/claude-haiku-4-5"))
+        .llm(OpenRouterClient::builder()
+            .api_key(&config.llm.api_key)
+            .base_url(&config.llm.base_url)
+            .build())
+        .build().await?
+        .run().await?;
+    Ok(())
+}
 #+end_src
+
+=Runtime::builder()= registers agents, wires the LLM, starts the supervisor. =run()= looks at argv -- if you pass an agent name and a prompt, it dispatches directly. If you pass =serve=, it starts an HTTP server.
+
+#+begin_src bash
+cargo run --bin demo researcher "the history of Rust"
+#+end_src
+
+Each agent picks its own model. The researcher and editor use Haiku (fast, cheap), the writer uses Sonnet (better at creative work). The supervisor injects peer handles automatically, so =ctx.peers["writer"]= just works.
+
+* Runtime and triggers
+
+The old =SwarmRuntime= is gone. =Runtime::builder()= is the only entry point now.
+
+#+begin_src rust
+Runtime::builder()
+    .agent(AgentEntry::new("my-agent", MyBehavior).model("anthropic/claude-sonnet-4"))
+    .llm(my_llm_provider)
+    .tools(my_tool_registry)          // shared tools for all agents
+    .session_store(my_store)          // optional, defaults to memory/file
+    .roles_dir(".mra/roles")          // load system prompts from markdown files
+    .budget(my_budget_tracker)        // optional token budget
+    .port(3000)                       // HTTP port (only used with "serve")
+    .build().await?
+    .run().await?;
+#+end_src
+
+=run()= inspects argv to decide what to do:
+
+| =argv[1]= | What happens |
+|------------|-------------|
+| =serve= | Starts an Axum HTTP server (needs =features = ["http"]=) |
+| =<agent-name> <prompt>= | One-shot CLI dispatch, prints result to stdout |
+| nothing | Prints usage and exits |
+
+* Sessions
+
+Conversation history is handled for you. When you call =ctx.chat()=, the framework prepends all previous turns before sending to the LLM, then appends the new exchange and saves it. Your behavior code stays stateless.
+
+Two built-in stores:
+- =MemorySessionStore= -- default for CLI mode. Lost when the process exits.
+- =FileSessionStore= -- default for HTTP mode. One JSON file per session in =.mra/sessions/=.
+
+Implement the =SessionStore= trait if you need Redis, Postgres, whatever.
+
+* HTTP API
+
+Gated behind =features = ["http"]= so you don't pull in Axum if you don't need it.
+
+#+begin_src bash
+# Start the server
+cargo run --bin demo -- serve
+
+# New session
+curl -X POST localhost:3000/agents/researcher \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "explain ownership in Rust"}'
+
+# Continue a session
+curl -X POST localhost:3000/agents/researcher/SESSION_ID \
+  -d '{"prompt": "now explain lifetimes", "role": "teacher"}'
+
+# Get history
+curl localhost:3000/agents/researcher/SESSION_ID
+
+# Delete session
+curl -X DELETE localhost:3000/agents/researcher/SESSION_ID
+#+end_src
+
+Send =Accept: text/event-stream= and you get SSE instead of buffered JSON:
+
+#+begin_src
+data: {"type":"token","content":"Ownership is"}
+data: {"type":"token","content":" Rust's way of"}
+data: {"type":"done","session_id":"...","usage":{...}}
+#+end_src
+
+* Sandbox
+
+Agents can work inside an isolated temp directory. Mount real host paths in via symlinks. When the workspace drops, the temp dir gets cleaned up.
+
+#+begin_src rust
+use mra::sandbox::{Sandbox, VirtualSandbox};
+
+let mut sandbox = VirtualSandbox::with_mount("workspace", project_dir)?;
+let result = sandbox.exec("ls workspace/src/", Default::default()).await?;
+println!("{}", result.stdout);
+#+end_src
+
+Tools (shell, read_file, edit_file) run inside this workspace. Path traversal outside the root is rejected.
+
+* Tools
+
+Three built-in tools. Register them in a =ToolRegistry= and pass to the runtime:
+
+#+begin_src rust
+use std::sync::Arc;
+use mra::tool::{ToolRegistry, ShellTool, ReadFileTool, EditFileTool};
+
+let tools = ToolRegistry::new();
+tools.register(Arc::new(ShellTool::builder().timeout(Duration::from_secs(60)).build()))?;
+tools.register(Arc::new(ReadFileTool::new()))?;
+tools.register(Arc::new(EditFileTool::new()))?;
+
+Runtime::builder()
+    .tools(tools)
+    // ...
+#+end_src
+
+Inside a behavior, use =ctx.chat_with_tools()= for an autonomous tool loop -- the LLM picks tools, you execute them, feed results back, repeat until it's done:
+
+#+begin_src rust
+let result = ctx.chat_with_tools(
+    &LlmRequest::builder()
+        .system("You are a code reviewer with shell and read_file tools.")
+        .user("review src/lib.rs")
+        .tools(ctx.tools.specs())
+        .build(),
+    15,  // max iterations
+).await?;
+#+end_src
+
+Or call tools manually with =ctx.call_tool("shell", json!({"command": "ls"}))=. This sends heartbeats to the supervisor while the tool runs, so long commands don't trigger hang detection.
+
+* Roles
+
+Drop markdown files in =.mra/roles/= and they become named system prompts. The filename stem is the role name.
+
+#+begin_src bash
+# .mra/roles/coder.md
+echo "You are an expert Rust developer. Read before you edit." > .mra/roles/coder.md
+#+end_src
+
+Pass a role through the HTTP API with ="role": "coder"= in the request body. The system message gets injected for that one call -- it's never saved to session history, so it doesn't pollute the transcript.
 
 * Supervision
 
@@ -71,34 +209,16 @@ Restart strategies:
 - =OneForAll= -- restart every agent when one crashes
 
 Restart policies per child:
-- =Permanent= -- always restart, regardless of how it exited
-- =Transient= -- restart only on failure (not normal exit)
+- =Permanent= -- always restart
+- =Transient= -- restart only on failure
 - =Temporary= -- never restart
 
-Other stuff the supervisor handles:
+Other stuff:
 - Exponential backoff between restarts (configurable base and cap)
-- A global restart intensity limit -- too many restarts in a window and it gives up
+- Global restart intensity limit -- too many restarts in a window and it gives up
 - Hang detection by polling each agent's last-activity timestamp
 - Peer injection -- agents get handles to their siblings through =ctx.peers=
-- Hot-swap mailbox via =ArcSwap= -- when an agent restarts, existing handles keep working because the supervisor swaps the new channel sender into the same stable slot
-
-#+begin_src rust
-use mra::config::AgentConfig;
-use mra::runtime::SwarmRuntime;
-use mra::supervisor::{ChildSpec, ChildRestart, SupervisorConfig};
-
-let runtime = SwarmRuntime::new(SupervisorConfig::default());
-
-// ChildSpec::from_behavior handles all the factory boilerplate.
-// Just give it a config and a closure that returns a behavior.
-let editor_spec = ChildSpec::from_behavior(AgentConfig::new("editor"), |_| Editor)
-    .with_restart(ChildRestart::Permanent);
-
-// Spawn in dependency order. The supervisor populates ctx.peers
-// with whatever siblings are already alive.
-runtime.spawn(editor_spec).await?;
-runtime.spawn(ChildSpec::from_behavior(AgentConfig::new("writer"), |_| Writer)).await?;
-#+end_src
+- Hot-swap mailbox via =ArcSwap= -- when an agent restarts, existing handles keep working
 
 You can subscribe to lifecycle events:
 
@@ -114,55 +234,7 @@ while let Ok(event) = events.recv().await {
 }
 #+end_src
 
-** How restarts work internally
-
-All restart logic lives in =RestartManager=. When a child exits, the supervisor calls =restart_mgr.decide()= and gets back one of:
-
-- =RestartAfter { delay }= -- schedule a restart after backoff
-- =RestartAll= -- trigger a cascade (OneForAll strategy)
-- =NoRestart= -- policy says don't restart
-- =ChildLimitExceeded= -- this child restarted too many times
-- =IntensityExceeded= -- supervisor-wide limit hit, shut everything down
-
-Backoff delays are non-blocking. Instead of sleeping in the supervisor loop, pending restarts go into a queue and get processed via =select!=. This keeps the supervisor responsive even when multiple agents are backing off.
-
-* Tools
-
-Agents can call tools during their =handle= loop. A tool is anything that implements the =Tool= trait -- an async function that takes JSON arguments and returns text output. The LLM sees the tool's name, description, and JSON Schema parameters, then decides when to call it.
-
-Two built-in tools:
-
-- *=ShellTool=* -- runs a shell command via =/bin/sh -c=. Configurable timeout (default 30s), =kill_on_drop=, output capped at 32 KB.
-- *=ReadFileTool=* -- reads a file and returns its contents, capped at 64 KB.
-
-Register tools in a =ToolRegistry= and pass it to the builder:
-
-#+begin_src rust
-use std::sync::Arc;
-use mra::agent::AgentSpawn;
-use mra::tool::{ToolRegistry, ShellTool, ReadFileTool};
-
-let mut tools = ToolRegistry::new();
-tools.register(Arc::new(ShellTool::new())).unwrap();
-tools.register(Arc::new(ReadFileTool::new())).unwrap();
-
-let spawned = AgentSpawn::new("coder", CoderBehavior)
-    .llm(llm)
-    .tools(tools)
-    .spawn();
-#+end_src
-
-Inside a behavior handler, call tools through =ctx.call_tool()=. This sends periodic heartbeats to the supervisor while the tool runs, so long commands don't trigger hang detection:
-
-#+begin_src rust
-let output = ctx.call_tool("shell", serde_json::json!({
-    "command": "ls -la"
-})).await?;
-#+end_src
-
-The tool specs are available via =ctx.tools.specs()= for forwarding to the LLM in an =LlmRequest=.
-
-* Running the demo
+* Running the demos
 
 Set up your OpenRouter API key:
 
@@ -177,13 +249,17 @@ Or use an env var:
 export MRA_LLM__API_KEY="your-key-here"
 #+end_src
 
-Run it:
+Two demos:
 
 #+begin_src bash
-cargo run --bin demo "the invention of the transistor"
+# Pipeline: researcher -> writer -> editor
+cargo run --bin demo researcher "the invention of the transistor"
+
+# Coding agent: reads files, runs commands, fixes code
+cargo run --bin demo_agent coder "review src/lib.rs and fix any issues"
 #+end_src
 
-Three agents (researcher, writer, editor) form a pipeline. Each calls the LLM and hands the result to the next one. The supervisor prints lifecycle events as it goes.
+The pipeline demo uses three agents with different models. The coding agent uses a sandbox workspace with shell, read_file, and edit_file tools, and runs an autonomous tool loop.
 
 * Config
 
@@ -204,13 +280,11 @@ max_agents = 100
 shutdown_timeout_secs = 30
 #+end_src
 
-* How it fits together
+* Wire them together
 
 Each agent is two pieces:
 
 - =AgentHandle= -- the external API. Cloneable, =Send + Sync=. Sends tasks through a bounded =mpsc= channel routed through an =ArcSwap= mailbox slot.
 - =AgentRunner= -- the internal loop. Owns mutable state, receives messages, calls your =AgentBehavior::handle=. Runs inside the supervisor's =JoinSet=.
-
-=AgentSpawn= wires these together. You give it a name and behavior, optionally set LLM/tools/budget/peers, and call =.spawn()=. For supervised agents, =ChildSpec::from_behavior= wraps the builder so you don't have to write factory closures by hand.
 
 The =ArcSwap= mailbox slot is what makes restarts transparent. When an agent dies and the supervisor respawns it, the new =mpsc::Sender= gets swapped into the same slot. Anyone holding an =AgentHandle= -- peers, external code, whoever -- keeps sending to the same stable address. They never know the agent restarted.
