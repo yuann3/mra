@@ -104,6 +104,7 @@ fn prepare_agent<B: AgentBehavior>(init: AgentInit<B>) -> PreparedAgent<B> {
         session_id: None,
         session_store: None,
         role_registry: init.role_registry,
+        active_role: None,
     };
 
     PreparedAgent {
@@ -135,6 +136,7 @@ impl<B: AgentBehavior> AgentRunner<B> {
                         self.ctx.session_id = task.session_id.take();
                         self.ctx.history = std::mem::take(&mut task.history);
                         self.ctx.session_store = task.session_store.take();
+                        self.ctx.active_role = task.role.take();
 
                         let _ = self.ctx.progress_tx.send(ProgressState {
                             last_progress: tokio::time::Instant::now(),
@@ -193,6 +195,7 @@ impl<B: AgentBehavior> AgentRunner<B> {
                         self.ctx.session_id = task.session_id.take();
                         self.ctx.history = std::mem::take(&mut task.history);
                         self.ctx.session_store = task.session_store.take();
+                        self.ctx.active_role = task.role.take();
 
                         let _ = self.ctx.progress_tx.send(ProgressState {
                             last_progress: tokio::time::Instant::now(),
@@ -358,6 +361,7 @@ impl AgentHandle {
             session_id: None,
             session_store: None,
             role_registry: init.role_registry,
+            active_role: None,
         };
 
         let runner = ErasedAgentRunner {
@@ -416,6 +420,7 @@ impl ErasedAgentRunner {
                         self.ctx.session_id = task.session_id.take();
                         self.ctx.history = std::mem::take(&mut task.history);
                         self.ctx.session_store = task.session_store.take();
+                        self.ctx.active_role = task.role.take();
 
                         let _ = self.ctx.progress_tx.send(ProgressState {
                             last_progress: tokio::time::Instant::now(),
@@ -472,6 +477,7 @@ impl ErasedAgentRunner {
                         self.ctx.session_id = task.session_id.take();
                         self.ctx.history = std::mem::take(&mut task.history);
                         self.ctx.session_store = task.session_store.take();
+                        self.ctx.active_role = task.role.take();
 
                         let _ = self.ctx.progress_tx.send(ProgressState {
                             last_progress: tokio::time::Instant::now(),

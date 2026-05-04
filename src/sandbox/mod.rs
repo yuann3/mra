@@ -376,4 +376,13 @@ mod tests {
         let sentinel = link.join("hello.txt");
         assert!(sentinel.exists(), "sentinel file reachable through mount");
     }
+
+    #[test]
+    fn workspace_cleaned_up_on_drop() {
+        let ws = Workspace::new().expect("workspace");
+        let path = ws.path().to_path_buf();
+        assert!(path.exists(), "workspace should exist before drop");
+        drop(ws);
+        assert!(!path.exists(), "workspace should be deleted after drop");
+    }
 }

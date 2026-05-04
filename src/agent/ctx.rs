@@ -73,6 +73,10 @@ pub struct AgentCtx {
     pub(crate) session_store: Option<Arc<dyn SessionStore>>,
     /// Role registry for system prompt overlays. Populated at runtime build time.
     pub(crate) role_registry: crate::runtime::roles::RoleRegistry,
+    /// Active role for the current task. Set by the runner from `Task::role`.
+    /// When `Some`, `chat()` automatically calls `with_role()` to prepend the
+    /// system message. Cleared between tasks.
+    pub(crate) active_role: Option<String>,
 }
 
 impl AgentCtx {
@@ -164,12 +168,23 @@ impl AgentCtx {
             return Err(AgentError::BudgetExceeded);
         }
 
-        // 1. Build full message list: history + request.messages
+        // 1. Apply active role (if set) — inject system message before everything.
+        // The system message is NOT stored in session history.
+        let request = if let Some(ref role_name) = self.active_role {
+            match self.with_role(role_name, request) {
+                Some(req_with_role) => std::borrow::Cow::Owned(req_with_role),
+                None => std::borrow::Cow::Borrowed(request),
+            }
+        } else {
+            std::borrow::Cow::Borrowed(request)
+        };
+
+        // 2. Build full message list: history + request.messages
         let mut full_messages: Vec<ChatMessage> =
             self.history.iter().map(|m| m.to_chat_message()).collect();
         full_messages.extend_from_slice(&request.messages);
 
-        // 2. Resolve model: per-agent override takes precedence over request.model
+        // 3. Resolve model: per-agent override takes precedence over request.model
         let effective_model = self.model.clone().or_else(|| request.model.clone());
 
         let full_request = LlmRequest {
@@ -338,6 +353,7 @@ mod tests {
             session_id: None,
             session_store: None,
             role_registry: registry,
+            active_role: None,
         }
     }
 

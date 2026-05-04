@@ -37,6 +37,9 @@ pub struct Task {
     /// Session store reference for saving history after each `ctx.chat()` call.
     #[serde(skip)]
     pub(crate) session_store: Option<Arc<dyn SessionStore>>,
+    /// Optional role name to apply for this task. Validated at the HTTP layer.
+    #[serde(skip)]
+    pub(crate) role: Option<String>,
 }
 
 impl std::fmt::Debug for Task {
@@ -47,6 +50,7 @@ impl std::fmt::Debug for Task {
             .field("context", &self.context)
             .field("session_id", &self.session_id)
             .field("history_len", &self.history.len())
+            .field("role", &self.role)
             .finish_non_exhaustive()
     }
 }
@@ -61,6 +65,7 @@ impl Task {
             session_id: None,
             history: Vec::new(),
             session_store: None,
+            role: None,
         }
     }
 }

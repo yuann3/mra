@@ -3,8 +3,7 @@ use std::time::Duration;
 use mra::agent::{AgentBehavior, AgentCtx, AgentReply, Task};
 use mra::config::AgentConfig;
 use mra::error::AgentError;
-use mra::runtime::SwarmRuntime;
-use mra::supervisor::{ChildSpec, SupervisorConfig};
+use mra::supervisor::{ChildSpec, SupervisorConfig, SupervisorHandle};
 
 struct EchoBehavior;
 
@@ -25,36 +24,36 @@ fn echo_spec(name: &str) -> ChildSpec {
 
 #[tokio::test]
 async fn test_runtime_spawn_and_execute() {
-    let runtime = SwarmRuntime::new(SupervisorConfig::default());
+    let (supervisor, _join) = SupervisorHandle::start(SupervisorConfig::default());
 
-    let handle = runtime.spawn(echo_spec("echo")).await.unwrap();
+    let handle = supervisor.start_child(echo_spec("echo")).await.unwrap();
 
     let reply = handle.execute(Task::new("ping")).await.unwrap();
     assert_eq!(reply.output, "ping");
 
-    runtime.shutdown().await;
+    supervisor.shutdown().await;
 }
 
 #[tokio::test]
 async fn test_runtime_shutdown_completes() {
-    let runtime = SwarmRuntime::new(SupervisorConfig::default());
-    runtime.spawn(echo_spec("a")).await.unwrap();
-    runtime.spawn(echo_spec("b")).await.unwrap();
+    let (supervisor, _join) = SupervisorHandle::start(SupervisorConfig::default());
+    supervisor.start_child(echo_spec("a")).await.unwrap();
+    supervisor.start_child(echo_spec("b")).await.unwrap();
 
-    let result = tokio::time::timeout(Duration::from_secs(5), runtime.shutdown()).await;
+    let result = tokio::time::timeout(Duration::from_secs(5), supervisor.shutdown()).await;
     assert!(result.is_ok(), "shutdown should complete within timeout");
 }
 
 #[tokio::test]
 async fn test_runtime_get_handle_by_name() {
-    let runtime = SwarmRuntime::new(SupervisorConfig::default());
-    runtime.spawn(echo_spec("echo")).await.unwrap();
+    let (supervisor, _join) = SupervisorHandle::start(SupervisorConfig::default());
+    supervisor.start_child(echo_spec("echo")).await.unwrap();
 
-    let looked_up = runtime.get_handle_by_name("echo").await;
+    let looked_up = supervisor.child("echo").await;
     assert!(looked_up.is_some());
 
-    let missing = runtime.get_handle_by_name("nonexistent").await;
+    let missing = supervisor.child("nonexistent").await;
     assert!(missing.is_none());
 
-    runtime.shutdown().await;
+    supervisor.shutdown().await;
 }

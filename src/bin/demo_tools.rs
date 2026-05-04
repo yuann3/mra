@@ -25,9 +25,9 @@ use mra::agent::{AgentBehavior, AgentCtx, AgentReply, AgentSpawn, Task};
 use mra::config::{AgentConfig, MraConfig};
 use mra::error::AgentError;
 use mra::llm::{ChatMessage, LlmProvider, LlmRequest, OpenRouterClient, Role};
-use mra::runtime::SwarmRuntime;
 use mra::supervisor::{
     ChildContext, ChildRestart, ChildSpec, SpawnedChild, SupervisorConfig, SupervisorEvent,
+    SupervisorHandle,
 };
 use mra::tool::{EditFileTool, ReadFileTool, ShellTool, ToolOutput, ToolRegistry};
 
@@ -228,13 +228,19 @@ async fn main() -> anyhow::Result<()> {
             .build(),
     );
 
+    let budget = Arc::new(
+        mra::budget::BudgetTracker::builder()
+            .global_limit(100_000)
+            .build_unconnected(),
+    );
     let sup_config = SupervisorConfig::builder()
         .hang_check_interval(Duration::from_secs(5))
+        .budget(budget.clone())
         .build();
-    let runtime = SwarmRuntime::with_budget(sup_config, 100_000);
+    let (supervisor, _join) = SupervisorHandle::start_with_budget(sup_config, Some(budget.clone()));
 
     // Subscribe to supervisor events
-    let mut events = runtime.subscribe();
+    let mut events = supervisor.subscribe();
     let event_task = tokio::spawn(async move {
         while let Ok(event) = events.recv().await {
             match event {
@@ -290,7 +296,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let tools = build_tool_registry();
-    runtime.spawn(coder_spec(llm.clone(), tools)).await?;
+    supervisor.start_child(coder_spec(llm.clone(), tools)).await?;
 
     let task = std::env::args().nth(1).unwrap_or_else(|| {
         "Run cargo clippy on this project, read any files with warnings, and fix the issues".into()
@@ -300,7 +306,7 @@ async fn main() -> anyhow::Result<()> {
     println!("[*] Tools: shell, read_file, edit_file");
     println!("[~] Max iterations: {MAX_ITERATIONS}\n");
 
-    let coder = runtime.get_handle_by_name("coder").await.unwrap();
+    let coder = supervisor.child("coder").await.unwrap();
     let reply = coder.execute(Task::new(&task)).await?;
 
     println!("\n[ok] Done ({} total tokens):\n", reply.total_tokens);
@@ -308,20 +314,19 @@ async fn main() -> anyhow::Result<()> {
 
     // Token breakdown
     println!("\n[#] Token usage:");
-    if let Some(usage) = runtime.token_usage() {
-        println!(
-            "   Global: {} / {} tokens",
-            usage.used,
-            usage.limit.map_or("∞".to_string(), |l| l.to_string())
-        );
-    }
-    for child in runtime.list_children().await {
-        if let Some(usage) = runtime.agent_token_usage(&child.name) {
+    let usage = budget.run_usage();
+    println!(
+        "   Global: {} / {} tokens",
+        usage.used,
+        usage.limit.map_or("∞".to_string(), |l| l.to_string())
+    );
+    for child in supervisor.list_children().await {
+        if let Some(usage) = budget.agent_usage(&child.name) {
             println!("   {}: {} tokens (direct LLM usage)", child.name, usage.used);
         }
     }
 
-    runtime.shutdown().await;
+    supervisor.shutdown().await;
     let _ = event_task.await;
     Ok(())
 }

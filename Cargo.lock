@@ -758,6 +758,7 @@ dependencies = [
  "arc-swap",
  "axum",
  "figment",
+ "futures-core",
  "futures-util",
  "reqwest",
  "schemars",

@@ -387,4 +387,24 @@ mod tests {
         let result2 = store.save("../../etc/passwd", &[]).await;
         assert!(matches!(result2, Err(SessionError::Invalid(_))));
     }
+
+    #[tokio::test]
+    async fn file_store_cross_instance_persistence() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // First instance saves
+        let store1 = FileSessionStore::new(dir.path());
+        let turns = vec![
+            msg(Role::User, "hello from store1"),
+            msg(Role::Assistant, "hi back"),
+        ];
+        store1.save("cross-instance", &turns).await.unwrap();
+
+        // Second instance (same dir) loads — simulates process restart
+        let store2 = FileSessionStore::new(dir.path());
+        let loaded = store2.load("cross-instance").await.unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].content, "hello from store1");
+        assert_eq!(loaded[1].content, "hi back");
+    }
 }

@@ -29,6 +29,7 @@ figment = { version = "0.10", features = ["toml", "env"] }
 toml = "0.8"
 schemars = "1"
 tempfile = "3.27.0"
+futures-core = "0.3"
 axum = { version = "0.8", optional = true }
 futures-util = { version = "0.3", optional = true }
 

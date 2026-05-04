@@ -29,7 +29,7 @@ pub(crate) async fn run_cli(
 
     let store: Arc<dyn SessionStore> = Arc::new(MemorySessionStore::new());
 
-    let reply = runtime.dispatch(&agent_name, &prompt, None, Arc::clone(&store)).await;
+    let reply = runtime.dispatch(&agent_name, &prompt, None, None, Arc::clone(&store)).await;
 
     runtime.shutdown().await;
 

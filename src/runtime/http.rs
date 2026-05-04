@@ -14,7 +14,7 @@
 //! # Request body
 //!
 //! ```json
-//! { "prompt": "summarize the state of Rust async in 2025" }
+//! { "prompt": "summarize the state of Rust async in 2025", "role": "analyst" }
 //! ```
 //!
 //! # Response
@@ -23,7 +23,7 @@
 //! {
 //!   "session_id": "abc-123",
 //!   "response": "Rust async has matured...",
-//!   "usage": { "self_tokens": 142, "total_tokens": 89 }
+//!   "usage": { "prompt_tokens": 142, "completion_tokens": 89 }
 //! }
 //! ```
 
@@ -57,6 +57,8 @@ pub(crate) struct HttpState {
 #[derive(Deserialize)]
 struct PromptBody {
     prompt: Option<String>,
+    /// Optional role name. Must match a role in the runtime's `RoleRegistry`.
+    role: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -69,9 +71,9 @@ struct AgentResponse {
 #[derive(Serialize)]
 struct UsageInfo {
     /// Direct LLM token spend for this agent (does not include nested agents).
-    self_tokens: u64,
+    prompt_tokens: u64,
     /// End-to-end total including all nested agent calls.
-    total_tokens: u64,
+    completion_tokens: u64,
 }
 
 #[derive(Serialize)]
@@ -118,7 +120,7 @@ async fn post_new_session(
     };
 
     let session_id = Uuid::new_v4().to_string();
-    dispatch_and_respond(&state, &name, &prompt, Some(session_id), wants_sse(&headers)).await
+    dispatch_and_respond(&state, &name, &prompt, Some(session_id), body.role, wants_sse(&headers)).await
 }
 
 /// POST /agents/:name/:session_id — continue session
@@ -133,7 +135,7 @@ async fn post_continue_session(
         _ => return err(StatusCode::BAD_REQUEST, "missing or empty `prompt`").into_response(),
     };
 
-    dispatch_and_respond(&state, &name, &prompt, Some(session_id), wants_sse(&headers)).await
+    dispatch_and_respond(&state, &name, &prompt, Some(session_id), body.role, wants_sse(&headers)).await
 }
 
 /// GET /agents/:name/:session_id — fetch history
@@ -181,11 +183,23 @@ async fn dispatch_and_respond(
     agent_name: &str,
     prompt: &str,
     session_id: Option<String>,
+    role: Option<String>,
     sse: bool,
 ) -> axum::response::Response {
+    // Validate role exists in registry before dispatching.
+    if let Some(ref role_name) = role {
+        if state.runtime.role_registry.get(role_name).is_none() {
+            return err(
+                StatusCode::BAD_REQUEST,
+                format!("unknown role: {role_name}"),
+            )
+            .into_response();
+        }
+    }
+
     match state
         .runtime
-        .dispatch(agent_name, prompt, session_id.clone(), Arc::clone(&state.store))
+        .dispatch(agent_name, prompt, session_id.clone(), role, Arc::clone(&state.store))
         .await
     {
         Ok(reply) => {
@@ -199,8 +213,8 @@ async fn dispatch_and_respond(
                     "type": "done",
                     "session_id": sid,
                     "usage": {
-                        "self_tokens": reply.self_tokens,
-                        "total_tokens": reply.total_tokens,
+                        "prompt_tokens": reply.self_tokens,
+                        "completion_tokens": reply.total_tokens,
                     },
                 });
                 let events = vec![
@@ -217,8 +231,8 @@ async fn dispatch_and_respond(
                     session_id: sid,
                     response: reply.output,
                     usage: UsageInfo {
-                        self_tokens: reply.self_tokens,
-                        total_tokens: reply.total_tokens,
+                        prompt_tokens: reply.self_tokens,
+                        completion_tokens: reply.total_tokens,
                     },
                 };
                 axum::Json(body).into_response()
@@ -485,5 +499,87 @@ mod tests {
             content_type.contains("text/event-stream"),
             "content-type should be text/event-stream, got: {content_type}"
         );
+    }
+
+    #[tokio::test]
+    async fn post_continue_session_grows_history() {
+        let (app, store) = make_app().await;
+
+        // First POST creates a session
+        let req1 = Request::builder()
+            .method(Method::POST)
+            .uri("/agents/echo")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"prompt":"hello"}"#))
+            .unwrap();
+
+        let resp1 = app.clone().oneshot(req1).await.unwrap();
+        assert_eq!(resp1.status(), StatusCode::OK);
+        let body1 = axum::body::to_bytes(resp1.into_body(), 1024 * 1024).await.unwrap();
+        let json1: serde_json::Value = serde_json::from_slice(&body1).unwrap();
+        let session_id = json1["session_id"].as_str().unwrap();
+
+        // Second POST continues the session
+        let req2 = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/agents/echo/{session_id}"))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"prompt":"world"}"#))
+            .unwrap();
+
+        let resp2 = app.clone().oneshot(req2).await.unwrap();
+        assert_eq!(resp2.status(), StatusCode::OK);
+        let body2 = axum::body::to_bytes(resp2.into_body(), 1024 * 1024).await.unwrap();
+        let json2: serde_json::Value = serde_json::from_slice(&body2).unwrap();
+        assert!(json2["response"].as_str().unwrap().contains("world"));
+
+        // History should have 4 messages (user+assistant from first, user+assistant from second)
+        let history = store.load(session_id).await.unwrap();
+        assert_eq!(history.len(), 4, "history should have 4 messages after two turns");
+    }
+
+    #[tokio::test]
+    async fn post_with_unknown_role_returns_400() {
+        let (app, _store) = make_app().await;
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/agents/echo")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"prompt":"hello","role":"nonexistent"}"#))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["error"].as_str().unwrap().contains("unknown role"));
+    }
+
+    #[tokio::test]
+    async fn sse_stream_saves_session_history() {
+        let (app, store) = make_app().await;
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/agents/echo")
+            .header("content-type", "application/json")
+            .header("accept", "text/event-stream")
+            .body(Body::from(r#"{"prompt":"sse-test"}"#))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Parse session_id from done event
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let body_str = std::str::from_utf8(&body).unwrap();
+        // Extract session_id from the done event JSON
+        let done_line = body_str.lines().find(|l| l.contains("\"type\":\"done\"")).unwrap();
+        let done_data = done_line.strip_prefix("data:").unwrap().trim();
+        let done_json: serde_json::Value = serde_json::from_str(done_data).unwrap();
+        let session_id = done_json["session_id"].as_str().unwrap();
+
+        // History should have been saved
+        let history = store.load(session_id).await.unwrap();
+        assert!(history.len() >= 2, "history should have at least user + assistant after SSE");
     }
 }

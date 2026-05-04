@@ -414,6 +414,7 @@ impl Runtime {
         agent_name: &str,
         prompt: &str,
         session_id: Option<String>,
+        role: Option<String>,
         store: Arc<dyn SessionStore>,
     ) -> Result<crate::agent::AgentReply, RuntimeError> {
         let handle = self
@@ -437,85 +438,13 @@ impl Runtime {
         task.session_id = session_id;
         task.history = history;
         task.session_store = Some(Arc::clone(&store));
+        task.role = role;
 
         let reply = handle.execute(task).await?;
         Ok(reply)
     }
 }
 
-// ── Existing compat types ─────────────────────────────────────────────────────
-
-/// Thin wrapper around the root supervisor.
-///
-/// # Deprecated
-///
-/// Use [`Runtime::builder()`] for new code.
-#[deprecated(note = "Use Runtime::builder() instead")]
-pub struct SwarmRuntime {
-    supervisor: SupervisorHandle,
-    join: JoinHandle<Result<(), crate::error::SupervisorError>>,
-    budget: Option<Arc<BudgetTracker>>,
-}
-
-#[allow(deprecated)]
-impl SwarmRuntime {
-    /// Creates a new runtime backed by a supervisor with the given config.
-    pub fn new(config: SupervisorConfig) -> Self {
-        let (supervisor, join) = SupervisorHandle::start(config);
-        Self { supervisor, join, budget: None }
-    }
-
-    /// Creates a new runtime with a global token budget.
-    pub fn with_budget(config: SupervisorConfig, global_limit: u64) -> Self {
-        let budget = Arc::new(
-            BudgetTracker::builder()
-                .global_limit(global_limit)
-                .build_unconnected(),
-        );
-        let (supervisor, join) =
-            SupervisorHandle::start_with_budget(config, Some(budget.clone()));
-        Self { supervisor, join, budget: Some(budget) }
-    }
-
-    /// Spawns a child agent via the supervisor.
-    pub async fn spawn(
-        &self,
-        spec: ChildSpec,
-    ) -> Result<AgentHandle, SupervisorError> {
-        self.supervisor.start_child(spec).await
-    }
-
-    /// Looks up a child handle by name.
-    pub async fn get_handle_by_name(&self, name: &str) -> Option<AgentHandle> {
-        self.supervisor.child(name).await
-    }
-
-    /// Returns status snapshots of all supervised children.
-    pub async fn list_children(&self) -> Vec<ChildStatus> {
-        self.supervisor.list_children().await
-    }
-
-    /// Subscribes to supervisor events.
-    pub fn subscribe(&self) -> broadcast::Receiver<SupervisorEvent> {
-        self.supervisor.subscribe()
-    }
-
-    /// Returns current global token usage, if a budget is configured.
-    pub fn token_usage(&self) -> Option<RunUsage> {
-        self.budget.as_ref().map(|b| b.run_usage())
-    }
-
-    /// Returns per-agent token usage, if a budget is configured.
-    pub fn agent_token_usage(&self, name: &str) -> Option<AgentUsage> {
-        self.budget.as_ref().and_then(|b| b.agent_usage(name))
-    }
-
-    /// Gracefully shuts down all agents and the supervisor.
-    pub async fn shutdown(self) {
-        self.supervisor.shutdown().await;
-        let _ = self.join.await;
-    }
-}
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -595,7 +524,7 @@ mod tests {
 
         let store: Arc<dyn SessionStore> = Arc::new(MemorySessionStore::new());
         let reply = runtime
-            .dispatch("echo", "hello", None, Arc::clone(&store))
+            .dispatch("echo", "hello", None, None, Arc::clone(&store))
             .await
             .unwrap();
 
@@ -630,7 +559,7 @@ mod tests {
         // how many messages were in the context (history + current).
         let store_arc: Arc<dyn SessionStore> = store.clone();
         let reply = runtime
-            .dispatch("echo", "second question", Some("s1".into()), Arc::clone(&store_arc))
+            .dispatch("echo", "second question", Some("s1".into()), None, Arc::clone(&store_arc))
             .await
             .unwrap();
 
@@ -657,7 +586,7 @@ mod tests {
 
         let store: Arc<dyn SessionStore> = Arc::new(MemorySessionStore::new());
         let reply = runtime
-            .dispatch("echo", "hi", None, store)
+            .dispatch("echo", "hi", None, None, store)
             .await
             .unwrap();
 
@@ -676,7 +605,7 @@ mod tests {
 
         let store: Arc<dyn SessionStore> = Arc::new(MemorySessionStore::new());
         let err = runtime
-            .dispatch("nonexistent", "hi", None, store)
+            .dispatch("nonexistent", "hi", None, None, store)
             .await
             .unwrap_err();
 
