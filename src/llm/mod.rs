@@ -60,6 +60,23 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
 }
 
+impl ChatMessage {
+    /// Creates a system message.
+    pub fn system(content: impl Into<String>) -> Self {
+        Self { role: Role::System, content: content.into(), tool_calls: vec![], tool_call_id: None }
+    }
+
+    /// Creates a user message.
+    pub fn user(content: impl Into<String>) -> Self {
+        Self { role: Role::User, content: content.into(), tool_calls: vec![], tool_call_id: None }
+    }
+
+    /// Creates an assistant message.
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self { role: Role::Assistant, content: content.into(), tool_calls: vec![], tool_call_id: None }
+    }
+}
+
 /// Request payload for an LLM chat completion.
 ///
 /// `model` is optional — if `None`, the provider uses its configured default.
@@ -113,6 +130,16 @@ impl LlmRequestBuilder {
     pub fn message(mut self, message: ChatMessage) -> Self {
         self.messages.push(message);
         self
+    }
+
+    /// Appends a system message.
+    pub fn system(self, content: impl Into<String>) -> Self {
+        self.message(ChatMessage::system(content))
+    }
+
+    /// Appends a user message.
+    pub fn user(self, content: impl Into<String>) -> Self {
+        self.message(ChatMessage::user(content))
     }
 
     /// Sets the model identifier (overrides provider default).

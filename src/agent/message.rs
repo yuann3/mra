@@ -83,6 +83,19 @@ pub struct AgentReply {
     pub total_tokens: u64,
 }
 
+impl AgentReply {
+    /// Creates a reply from a task and an LLM response.
+    pub fn from_response(task: &Task, response: &crate::llm::LlmResponse) -> Self {
+        let tokens = response.total_tokens();
+        Self {
+            task_id: task.id,
+            output: response.content.clone(),
+            self_tokens: tokens,
+            total_tokens: tokens,
+        }
+    }
+}
+
 /// Internal message envelope sent through the agent's bounded `mpsc` channel.
 pub(crate) enum AgentMessage {
     Execute {
