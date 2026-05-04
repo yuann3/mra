@@ -23,7 +23,7 @@
 //! {
 //!   "session_id": "abc-123",
 //!   "response": "Rust async has matured...",
-//!   "usage": { "prompt_tokens": 142, "completion_tokens": 89 }
+//!   "usage": { "self_tokens": 142, "total_tokens": 89 }
 //! }
 //! ```
 
