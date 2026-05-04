@@ -41,8 +41,9 @@ pub struct Role {
 
 /// Loaded role registry. Populated at Runtime build time from `.mra/roles/`.
 ///
-/// Cheap to clone — the inner map is wrapped in an `Arc` via standard clone
-/// semantics for `HashMap` (each `RoleRegistry` is independent).
+/// Cloning is O(n) in the number of roles — the inner `HashMap` is copied in
+/// full. Roles are loaded once at startup and cloned once per agent spawn, so
+/// the cost is negligible in practice.
 #[derive(Default, Clone, Debug)]
 pub struct RoleRegistry {
     roles: HashMap<String, Role>,

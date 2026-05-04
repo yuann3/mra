@@ -228,10 +228,6 @@ impl RuntimeBuilder {
         let (supervisor, join) =
             SupervisorHandle::start_with_budget(sup_config, budget.clone());
 
-        let mut agent_names: Vec<String> = self.agents.iter().map(|e| e.name.clone()).collect();
-        // Track registered agent names for validation
-        agent_names.dedup();
-
         // Spawn each agent under the supervisor with ChildRestart::Temporary.
         // Behaviors are consumed on first spawn; restarts are not supported.
         for entry in self.agents {

@@ -57,11 +57,6 @@ pub(crate) struct HttpState {
 #[derive(Deserialize)]
 struct PromptBody {
     prompt: Option<String>,
-    /// Optional role name to inject as a system prompt overlay.
-    /// The named role must exist in `.mra/roles/<role>.md`.
-    /// Accepted and forwarded; actual injection happens inside `AgentBehavior`.
-    #[allow(dead_code)]
-    role: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -73,8 +68,10 @@ struct AgentResponse {
 
 #[derive(Serialize)]
 struct UsageInfo {
-    prompt_tokens: u64,
-    completion_tokens: u64,
+    /// Direct LLM token spend for this agent (does not include nested agents).
+    self_tokens: u64,
+    /// End-to-end total including all nested agent calls.
+    total_tokens: u64,
 }
 
 #[derive(Serialize)]
@@ -151,7 +148,11 @@ async fn get_history(
                 messages: messages
                     .into_iter()
                     .map(|m| HistoryMessage {
-                        role: format!("{:?}", m.role).to_lowercase(),
+                        role: match m.role {
+                            crate::session::Role::User => "user",
+                            crate::session::Role::Assistant => "assistant",
+                            crate::session::Role::System => "system",
+                        }.to_string(),
                         content: m.content,
                     })
                     .collect(),
@@ -198,8 +199,8 @@ async fn dispatch_and_respond(
                     "type": "done",
                     "session_id": sid,
                     "usage": {
-                        "prompt_tokens": reply.self_tokens,
-                        "completion_tokens": reply.total_tokens,
+                        "self_tokens": reply.self_tokens,
+                        "total_tokens": reply.total_tokens,
                     },
                 });
                 let events = vec![
@@ -216,8 +217,8 @@ async fn dispatch_and_respond(
                     session_id: sid,
                     response: reply.output,
                     usage: UsageInfo {
-                        prompt_tokens: reply.self_tokens,
-                        completion_tokens: reply.total_tokens,
+                        self_tokens: reply.self_tokens,
+                        total_tokens: reply.total_tokens,
                     },
                 };
                 axum::Json(body).into_response()
