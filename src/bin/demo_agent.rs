@@ -30,11 +30,19 @@ impl AgentBehavior for Coder {
             15,
         ).await?;
 
-        println!("[ok] Done in {} iteration(s), {} tokens",
-            result.iterations, result.total_prompt_tokens + result.total_completion_tokens);
+        println!(
+            "[ok] Done in {} iteration(s), {} tokens",
+            result.iterations,
+            result.total_prompt_tokens + result.total_completion_tokens
+        );
 
         let total = result.total_prompt_tokens + result.total_completion_tokens;
-        Ok(AgentReply { task_id: input.id, output: result.response.content, self_tokens: total, total_tokens: total })
+        Ok(AgentReply {
+            task_id: input.id,
+            output: result.response.content,
+            self_tokens: total,
+            total_tokens: total,
+        })
     }
 }
 
@@ -45,25 +53,38 @@ async fn main() -> anyhow::Result<()> {
     // Sandbox: mount the project at /workspace so the agent can read/edit files
     let project = std::env::current_dir()?;
     let mut sandbox = VirtualSandbox::with_mount("workspace", project.clone())?;
-    let ls = sandbox.exec("ls workspace/src/", ExecOptions::default()).await?;
-    println!("[*] Workspace: {} -> {}", project.display(), ls.stdout.trim().replace('\n', ", "));
+    let ls = sandbox
+        .exec("ls workspace/src/", ExecOptions::default())
+        .await?;
+    println!(
+        "[*] Workspace: {} -> {}",
+        project.display(),
+        ls.stdout.trim().replace('\n', ", ")
+    );
 
     // Tools: shell (60s timeout for cargo), read_file, edit_file
     let tools = ToolRegistry::new();
-    tools.register(Arc::new(ShellTool::builder().timeout(Duration::from_secs(60)).build()))?;
+    tools.register(Arc::new(
+        ShellTool::builder()
+            .timeout(Duration::from_secs(60))
+            .build(),
+    ))?;
     tools.register(Arc::new(ReadFileTool::new()))?;
     tools.register(Arc::new(EditFileTool::new()))?;
 
     Runtime::builder()
-        .agent(AgentEntry::new("coder", Coder).model(&config.llm.model))
-        .llm(OpenRouterClient::builder()
-            .api_key(&config.llm.api_key)
-            .base_url(&config.llm.base_url)
-            .default_model(&config.llm.model)
-            .build())
+        .agent(AgentEntry::new("coder", Coder).model("anthropic/claude-sonnet-4"))
+        .llm(
+            OpenRouterClient::builder()
+                .api_key(&config.llm.api_key)
+                .base_url(&config.llm.base_url)
+                .build(),
+        )
         .tools(tools)
         .roles_dir(".mra/roles")
-        .build().await?
-        .run().await?;
+        .build()
+        .await?
+        .run()
+        .await?;
     Ok(())
 }
