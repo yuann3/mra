@@ -5,7 +5,7 @@
 *WIP.* Don't depend on this yet.
 #+end_quote
 
-An agent harness and runtime for Rust. Think of it like what Flue does for TypeScript, but in Rust -- a framework for building headless, programmable AI agents that run as Tokio actors with built-in supervision, sessions, sandboxing, and tool use. The whole thing runs off a single =Runtime::builder()= call.
+I wanted something lightweight that makes me happy. So here's an agent harness and runtime for Rust. Spawn AI agents as Tokio actors, give them tools and a sandbox, let them talk to LLMs. Headless, programmable, no GUI -- just Rust. The whole thing runs off a single =Runtime::builder()= call.
 
 * What is this?
 
