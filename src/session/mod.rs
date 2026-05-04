@@ -200,7 +200,9 @@ impl FileSessionStore {
     /// The directory need not exist yet; it will be created on the first
     /// [`save`](SessionStore::save) call.
     pub fn new(dir: impl AsRef<Path>) -> Self {
-        Self { dir: dir.as_ref().to_path_buf() }
+        Self {
+            dir: dir.as_ref().to_path_buf(),
+        }
     }
 
     /// Validates a session ID and returns the corresponding file path.
@@ -279,7 +281,10 @@ mod tests {
     use super::*;
 
     fn msg(role: Role, content: &str) -> Message {
-        Message { role, content: content.into() }
+        Message {
+            role,
+            content: content.into(),
+        }
     }
 
     #[tokio::test]
@@ -291,10 +296,7 @@ mod tests {
         assert!(history.is_empty());
 
         // Save a conversation
-        let turns = vec![
-            msg(Role::User, "Hello"),
-            msg(Role::Assistant, "Hi there!"),
-        ];
+        let turns = vec![msg(Role::User, "Hello"), msg(Role::Assistant, "Hi there!")];
         store.save("s1", &turns).await.unwrap();
 
         // Load it back
@@ -332,10 +334,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = FileSessionStore::new(dir.path());
 
-        let turns = vec![
-            msg(Role::User, "hello"),
-            msg(Role::Assistant, "hi"),
-        ];
+        let turns = vec![msg(Role::User, "hello"), msg(Role::Assistant, "hi")];
         store.save("sess1", &turns).await.unwrap();
 
         let loaded = store.load("sess1").await.unwrap();

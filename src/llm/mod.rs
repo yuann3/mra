@@ -63,17 +63,32 @@ pub struct ChatMessage {
 impl ChatMessage {
     /// Creates a system message.
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: Role::System, content: content.into(), tool_calls: vec![], tool_call_id: None }
+        Self {
+            role: Role::System,
+            content: content.into(),
+            tool_calls: vec![],
+            tool_call_id: None,
+        }
     }
 
     /// Creates a user message.
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: Role::User, content: content.into(), tool_calls: vec![], tool_call_id: None }
+        Self {
+            role: Role::User,
+            content: content.into(),
+            tool_calls: vec![],
+            tool_call_id: None,
+        }
     }
 
     /// Creates an assistant message.
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: Role::Assistant, content: content.into(), tool_calls: vec![], tool_call_id: None }
+        Self {
+            role: Role::Assistant,
+            content: content.into(),
+            tool_calls: vec![],
+            tool_call_id: None,
+        }
     }
 }
 
@@ -225,7 +240,8 @@ pub enum StreamChunk {
 }
 
 /// Boxed stream of [`StreamChunk`]s for object-safe streaming.
-pub type LlmStream = Pin<Box<dyn futures_core::Stream<Item = Result<StreamChunk, LlmError>> + Send>>;
+pub type LlmStream =
+    Pin<Box<dyn futures_core::Stream<Item = Result<StreamChunk, LlmError>> + Send>>;
 
 /// Trait for LLM provider implementations.
 ///
@@ -256,7 +272,9 @@ pub trait LlmProvider: Send + Sync + 'static {
                 Ok(StreamChunk::Delta(response.content.clone())),
                 Ok(StreamChunk::Done(response)),
             ];
-            Ok(Box::pin(VecStream { items: items.into_iter() }) as LlmStream)
+            Ok(Box::pin(VecStream {
+                items: items.into_iter(),
+            }) as LlmStream)
         })
     }
 }

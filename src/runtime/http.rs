@@ -120,7 +120,15 @@ async fn post_new_session(
     };
 
     let session_id = Uuid::new_v4().to_string();
-    dispatch_and_respond(&state, &name, &prompt, Some(session_id), body.role, wants_sse(&headers)).await
+    dispatch_and_respond(
+        &state,
+        &name,
+        &prompt,
+        Some(session_id),
+        body.role,
+        wants_sse(&headers),
+    )
+    .await
 }
 
 /// POST /agents/:name/:session_id — continue session
@@ -135,7 +143,15 @@ async fn post_continue_session(
         _ => return err(StatusCode::BAD_REQUEST, "missing or empty `prompt`").into_response(),
     };
 
-    dispatch_and_respond(&state, &name, &prompt, Some(session_id), body.role, wants_sse(&headers)).await
+    dispatch_and_respond(
+        &state,
+        &name,
+        &prompt,
+        Some(session_id),
+        body.role,
+        wants_sse(&headers),
+    )
+    .await
 }
 
 /// GET /agents/:name/:session_id — fetch history
@@ -154,16 +170,15 @@ async fn get_history(
                             crate::session::Role::User => "user",
                             crate::session::Role::Assistant => "assistant",
                             crate::session::Role::System => "system",
-                        }.to_string(),
+                        }
+                        .to_string(),
                         content: m.content,
                     })
                     .collect(),
             };
             axum::Json(body).into_response()
         }
-        Err(e) => {
-            err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
-        }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
@@ -199,7 +214,13 @@ async fn dispatch_and_respond(
 
     match state
         .runtime
-        .dispatch(agent_name, prompt, session_id.clone(), role, Arc::clone(&state.store))
+        .dispatch(
+            agent_name,
+            prompt,
+            session_id.clone(),
+            role,
+            Arc::clone(&state.store),
+        )
         .await
     {
         Ok(reply) => {
@@ -238,9 +259,11 @@ async fn dispatch_and_respond(
                 axum::Json(body).into_response()
             }
         }
-        Err(RuntimeError::UnknownAgent(_)) => {
-            err(StatusCode::NOT_FOUND, format!("unknown agent: {agent_name}")).into_response()
-        }
+        Err(RuntimeError::UnknownAgent(_)) => err(
+            StatusCode::NOT_FOUND,
+            format!("unknown agent: {agent_name}"),
+        )
+        .into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -272,17 +295,17 @@ pub(crate) async fn run_http(runtime: Runtime, port: u16) -> Result<(), RuntimeE
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!("HTTP server listening on {addr}");
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| RuntimeError::Supervisor(crate::error::SupervisorError::SpawnFailed(
-            format!("failed to bind {addr}: {e}")
-        )))?;
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+        RuntimeError::Supervisor(crate::error::SupervisorError::SpawnFailed(format!(
+            "failed to bind {addr}: {e}"
+        )))
+    })?;
 
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| RuntimeError::Supervisor(crate::error::SupervisorError::SpawnFailed(
-            format!("axum serve error: {e}")
-        )))?;
+    axum::serve(listener, app).await.map_err(|e| {
+        RuntimeError::Supervisor(crate::error::SupervisorError::SpawnFailed(format!(
+            "axum serve error: {e}"
+        )))
+    })?;
 
     Ok(())
 }
@@ -334,13 +357,27 @@ mod tests {
 
     struct Echo;
     impl AgentBehavior for Echo {
-        async fn handle(&mut self, ctx: &mut AgentCtx, input: Task) -> Result<AgentReply, AgentError> {
+        async fn handle(
+            &mut self,
+            ctx: &mut AgentCtx,
+            input: Task,
+        ) -> Result<AgentReply, AgentError> {
             let req = LlmRequest::builder()
-                .message(ChatMessage { role: Role::User, content: input.instruction.clone(), tool_calls: vec![], tool_call_id: None })
+                .message(ChatMessage {
+                    role: Role::User,
+                    content: input.instruction.clone(),
+                    tool_calls: vec![],
+                    tool_call_id: None,
+                })
                 .build();
             let resp = ctx.chat(&req).await?;
             let tokens = resp.total_tokens();
-            Ok(AgentReply { task_id: input.id, output: resp.content, self_tokens: tokens, total_tokens: tokens })
+            Ok(AgentReply {
+                task_id: input.id,
+                output: resp.content,
+                self_tokens: tokens,
+                total_tokens: tokens,
+            })
         }
     }
 
@@ -381,7 +418,9 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(!json["session_id"].as_str().unwrap_or("").is_empty());
         assert!(json["response"].as_str().unwrap_or("").contains("hello"));
@@ -421,10 +460,22 @@ mod tests {
 
         // Pre-seed a session
         use crate::session::{Message, Role as SRole};
-        store.save("s1", &[
-            Message { role: SRole::User, content: "hi".into() },
-            Message { role: SRole::Assistant, content: "hello".into() },
-        ]).await.unwrap();
+        store
+            .save(
+                "s1",
+                &[
+                    Message {
+                        role: SRole::User,
+                        content: "hi".into(),
+                    },
+                    Message {
+                        role: SRole::Assistant,
+                        content: "hello".into(),
+                    },
+                ],
+            )
+            .await
+            .unwrap();
 
         let req = Request::builder()
             .method(Method::GET)
@@ -434,7 +485,9 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["messages"].as_array().unwrap().len(), 2);
     }
@@ -444,7 +497,16 @@ mod tests {
         let (app, store) = make_app().await;
 
         use crate::session::{Message, Role as SRole};
-        store.save("s2", &[Message { role: SRole::User, content: "x".into() }]).await.unwrap();
+        store
+            .save(
+                "s2",
+                &[Message {
+                    role: SRole::User,
+                    content: "x".into(),
+                }],
+            )
+            .await
+            .unwrap();
 
         let req = Request::builder()
             .method(Method::DELETE)
@@ -470,10 +532,18 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
         let body_str = std::str::from_utf8(&body).unwrap();
-        assert!(body_str.contains("\"type\":\"token\""), "body should contain token event");
-        assert!(body_str.contains("\"type\":\"done\""), "body should contain done event");
+        assert!(
+            body_str.contains("\"type\":\"token\""),
+            "body should contain token event"
+        );
+        assert!(
+            body_str.contains("\"type\":\"done\""),
+            "body should contain done event"
+        );
     }
 
     #[tokio::test]
@@ -515,7 +585,9 @@ mod tests {
 
         let resp1 = app.clone().oneshot(req1).await.unwrap();
         assert_eq!(resp1.status(), StatusCode::OK);
-        let body1 = axum::body::to_bytes(resp1.into_body(), 1024 * 1024).await.unwrap();
+        let body1 = axum::body::to_bytes(resp1.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
         let json1: serde_json::Value = serde_json::from_slice(&body1).unwrap();
         let session_id = json1["session_id"].as_str().unwrap();
 
@@ -529,13 +601,19 @@ mod tests {
 
         let resp2 = app.clone().oneshot(req2).await.unwrap();
         assert_eq!(resp2.status(), StatusCode::OK);
-        let body2 = axum::body::to_bytes(resp2.into_body(), 1024 * 1024).await.unwrap();
+        let body2 = axum::body::to_bytes(resp2.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
         let json2: serde_json::Value = serde_json::from_slice(&body2).unwrap();
         assert!(json2["response"].as_str().unwrap().contains("world"));
 
         // History should have 4 messages (user+assistant from first, user+assistant from second)
         let history = store.load(session_id).await.unwrap();
-        assert_eq!(history.len(), 4, "history should have 4 messages after two turns");
+        assert_eq!(
+            history.len(),
+            4,
+            "history should have 4 messages after two turns"
+        );
     }
 
     #[tokio::test]
@@ -550,7 +628,9 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(json["error"].as_str().unwrap().contains("unknown role"));
     }
@@ -570,16 +650,24 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         // Parse session_id from done event
-        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
         let body_str = std::str::from_utf8(&body).unwrap();
         // Extract session_id from the done event JSON
-        let done_line = body_str.lines().find(|l| l.contains("\"type\":\"done\"")).unwrap();
+        let done_line = body_str
+            .lines()
+            .find(|l| l.contains("\"type\":\"done\""))
+            .unwrap();
         let done_data = done_line.strip_prefix("data:").unwrap().trim();
         let done_json: serde_json::Value = serde_json::from_str(done_data).unwrap();
         let session_id = done_json["session_id"].as_str().unwrap();
 
         // History should have been saved
         let history = store.load(session_id).await.unwrap();
-        assert!(history.len() >= 2, "history should have at least user + assistant after SSE");
+        assert!(
+            history.len() >= 2,
+            "history should have at least user + assistant after SSE"
+        );
     }
 }

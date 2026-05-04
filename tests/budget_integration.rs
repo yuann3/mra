@@ -93,13 +93,18 @@ fn test_spec(name: &str, llm: Arc<dyn LlmProvider>) -> ChildSpec {
 async fn test_budget_kill_switch() {
     let llm: Arc<dyn LlmProvider> = Arc::new(MockLlm(100)); // 100 tokens per call
 
-    let budget = Arc::new(BudgetTracker::builder().global_limit(250).build_unconnected());
-    let (supervisor, _join) = SupervisorHandle::start_with_budget(
-        SupervisorConfig::default(),
-        Some(budget.clone()),
+    let budget = Arc::new(
+        BudgetTracker::builder()
+            .global_limit(250)
+            .build_unconnected(),
     );
+    let (supervisor, _join) =
+        SupervisorHandle::start_with_budget(SupervisorConfig::default(), Some(budget.clone()));
 
-    supervisor.start_child(test_spec("agent", llm)).await.unwrap();
+    supervisor
+        .start_child(test_spec("agent", llm))
+        .await
+        .unwrap();
 
     let handle = supervisor.child("agent").await.unwrap();
 
@@ -129,11 +134,13 @@ async fn test_budget_kill_switch() {
 async fn test_per_agent_budget_limit() {
     let llm: Arc<dyn LlmProvider> = Arc::new(MockLlm(100));
 
-    let budget = Arc::new(BudgetTracker::builder().global_limit(50_000).build_unconnected());
-    let (supervisor, _join) = SupervisorHandle::start_with_budget(
-        SupervisorConfig::default(),
-        Some(budget.clone()),
+    let budget = Arc::new(
+        BudgetTracker::builder()
+            .global_limit(50_000)
+            .build_unconnected(),
     );
+    let (supervisor, _join) =
+        SupervisorHandle::start_with_budget(SupervisorConfig::default(), Some(budget.clone()));
 
     supervisor
         .start_child(test_spec("agent", llm).with_token_budget(150))
@@ -271,7 +278,10 @@ async fn test_no_budget_means_unlimited() {
 
     let (supervisor, _join) = SupervisorHandle::start(SupervisorConfig::default());
 
-    supervisor.start_child(test_spec("agent", llm)).await.unwrap();
+    supervisor
+        .start_child(test_spec("agent", llm))
+        .await
+        .unwrap();
 
     let handle = supervisor.child("agent").await.unwrap();
 

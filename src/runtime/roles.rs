@@ -83,7 +83,13 @@ impl RoleRegistry {
                 Err(_) => continue,
             };
 
-            registry.roles.insert(name.clone(), Role { name, system_prompt });
+            registry.roles.insert(
+                name.clone(),
+                Role {
+                    name,
+                    system_prompt,
+                },
+            );
         }
 
         registry
@@ -118,7 +124,9 @@ mod tests {
         drop(f);
 
         let registry = RoleRegistry::load_from_dir(dir.path());
-        let role = registry.get("analyst").expect("analyst role should be found");
+        let role = registry
+            .get("analyst")
+            .expect("analyst role should be found");
         assert_eq!(role.name, "analyst");
         assert!(role.system_prompt.contains("financial analyst"));
     }

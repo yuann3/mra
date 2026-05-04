@@ -221,7 +221,9 @@ impl RuntimeBuilder {
     pub async fn build(self) -> Result<Runtime, RuntimeError> {
         let llm: Option<Arc<dyn LlmProvider>> = self.llm;
         let budget = self.budget;
-        let roles_dir = self.roles_dir.unwrap_or_else(|| std::path::PathBuf::from(".mra/roles"));
+        let roles_dir = self
+            .roles_dir
+            .unwrap_or_else(|| std::path::PathBuf::from(".mra/roles"));
         let role_registry = crate::runtime::roles::RoleRegistry::load_from_dir(&roles_dir);
 
         let mut sup_builder = SupervisorConfig::builder();
@@ -236,8 +238,7 @@ impl RuntimeBuilder {
         }
         let sup_config = sup_builder.build();
 
-        let (supervisor, join) =
-            SupervisorHandle::start_with_budget(sup_config, budget.clone());
+        let (supervisor, join) = SupervisorHandle::start_with_budget(sup_config, budget.clone());
 
         // Spawn each agent under the supervisor with ChildRestart::Temporary.
         // Behaviors are consumed on first spawn; restarts are not supported.
@@ -281,17 +282,16 @@ impl RuntimeBuilder {
                         role_registry: registry,
                     });
                     Ok(child)
-                }) as std::pin::Pin<
-                    Box<
-                        dyn std::future::Future<
-                                Output = Result<SpawnedChild, SupervisorError>,
-                            > + Send,
-                    >,
-                >
+                })
+                    as std::pin::Pin<
+                        Box<
+                            dyn std::future::Future<Output = Result<SpawnedChild, SupervisorError>>
+                                + Send,
+                        >,
+                    >
             });
 
-            let spec = ChildSpec::new(&name, cfg, factory)
-                .with_restart(ChildRestart::Temporary);
+            let spec = ChildSpec::new(&name, cfg, factory).with_restart(ChildRestart::Temporary);
 
             supervisor.start_child(spec).await?;
         }
@@ -361,11 +361,7 @@ impl Runtime {
                 }
             }
             Some(name) => {
-                let prompt = args
-                    .get(2)
-                    .map(String::as_str)
-                    .unwrap_or("")
-                    .to_string();
+                let prompt = args.get(2).map(String::as_str).unwrap_or("").to_string();
                 cli::run_cli(self, name.to_string(), prompt).await
             }
             None => {
@@ -435,12 +431,11 @@ impl Runtime {
 
         // Load history from session store
         let history = if let Some(ref sid) = session_id {
-            store
-                .load(sid)
-                .await
-                .map_err(|e| RuntimeError::Agent(crate::error::AgentError::HandlerFailed(
-                    format!("session load failed: {e}"),
-                )))?
+            store.load(sid).await.map_err(|e| {
+                RuntimeError::Agent(crate::error::AgentError::HandlerFailed(format!(
+                    "session load failed: {e}"
+                )))
+            })?
         } else {
             Vec::new()
         };
@@ -455,7 +450,6 @@ impl Runtime {
         Ok(reply)
     }
 }
-
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -552,8 +546,14 @@ mod tests {
             .save(
                 "s1",
                 &[
-                    Message { role: SRole::User, content: "first question".into() },
-                    Message { role: SRole::Assistant, content: "first answer".into() },
+                    Message {
+                        role: SRole::User,
+                        content: "first question".into(),
+                    },
+                    Message {
+                        role: SRole::Assistant,
+                        content: "first answer".into(),
+                    },
                 ],
             )
             .await
@@ -570,7 +570,13 @@ mod tests {
         // how many messages were in the context (history + current).
         let store_arc: Arc<dyn SessionStore> = store.clone();
         let reply = runtime
-            .dispatch("echo", "second question", Some("s1".into()), None, Arc::clone(&store_arc))
+            .dispatch(
+                "echo",
+                "second question",
+                Some("s1".into()),
+                None,
+                Arc::clone(&store_arc),
+            )
             .await
             .unwrap();
 

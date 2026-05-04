@@ -220,7 +220,10 @@ impl AgentCtx {
                 Role::Tool => None, // tool round-trips are not persisted
             };
             if let Some(role) = session_role {
-                self.history.push(Message { role, content: msg.content.clone() });
+                self.history.push(Message {
+                    role,
+                    content: msg.content.clone(),
+                });
             }
         }
         self.history.push(Message {
@@ -229,9 +232,7 @@ impl AgentCtx {
         });
 
         // 4. Flush to session store if session_id is set
-        if let (Some(session_id), Some(store)) =
-            (&self.session_id, &self.session_store)
-        {
+        if let (Some(session_id), Some(store)) = (&self.session_id, &self.session_store) {
             store
                 .save(session_id, &self.history)
                 .await
@@ -335,8 +336,8 @@ mod tests {
     use crate::runtime::roles::RoleRegistry;
     use crate::tool::ToolRegistry;
 
-    use super::AgentCtx;
     use super::super::runner::ProgressState;
+    use super::AgentCtx;
 
     fn make_ctx_with_registry(registry: RoleRegistry) -> AgentCtx {
         let (progress_tx, _) = watch::channel(ProgressState::idle_now());
@@ -360,7 +361,11 @@ mod tests {
     #[test]
     fn with_role_prepends_system_message() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("test.md"), "You are a helpful test assistant.").unwrap();
+        std::fs::write(
+            dir.path().join("test.md"),
+            "You are a helpful test assistant.",
+        )
+        .unwrap();
         let registry = RoleRegistry::load_from_dir(dir.path());
 
         let ctx = make_ctx_with_registry(registry);
@@ -374,11 +379,21 @@ mod tests {
             })
             .build();
 
-        let result = ctx.with_role("test", &req).expect("role 'test' should exist");
+        let result = ctx
+            .with_role("test", &req)
+            .expect("role 'test' should exist");
 
-        assert_eq!(result.messages.len(), 2, "should have system + user message");
+        assert_eq!(
+            result.messages.len(),
+            2,
+            "should have system + user message"
+        );
         assert!(matches!(result.messages[0].role, Role::System));
-        assert!(result.messages[0].content.contains("helpful test assistant"));
+        assert!(
+            result.messages[0]
+                .content
+                .contains("helpful test assistant")
+        );
         assert!(matches!(result.messages[1].role, Role::User));
         assert_eq!(result.messages[1].content, "Hello!");
     }
