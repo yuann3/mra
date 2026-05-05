@@ -9,9 +9,10 @@ rust-version = "1.91"
 description = "Tokio-native multi-agent runtime with Erlang-style supervision"
 keywords = ["agent", "actor", "tokio", "supervision", "llm"]
 categories = ["asynchronous", "concurrency"]
-readme = "README.org"
+readme = "README.md"
 repository = "https://github.com/yuann3/mra"
 license = "MIT"
+exclude = [".mra/", "mra.toml", "mra.example.toml", "docs/", "plans/", "CLAUDE.md", ".gitignore"]
 
 [dependencies]
 arc-swap = "1"
@@ -37,13 +38,13 @@ futures-util = { version = "0.3", optional = true }
 default = []
 http = ["axum", "futures-util"]
 
-[[bin]]
-name = "demo"
-path = "src/bin/demo.rs"
+[[example]]
+name = "pipeline"
+path = "examples/pipeline.rs"
 
-[[bin]]
-name = "demo_agent"
-path = "src/bin/demo_agent.rs"
+[[example]]
+name = "coding_agent"
+path = "examples/coding_agent.rs"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
