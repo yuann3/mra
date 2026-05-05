@@ -1,16 +1,14 @@
 # mra
 
-> **WIP.** Don't depend on this yet.
+> **WIP.** Not stable release, API will change 
 
 I wanted something lightweight that makes me happy.
 
-MRA is a framework for building headless, programmable AI agents that run as Tokio actors with built-in supervision, sessions, sandboxing, and tool use.
+MRA is a framework for building headless, programmable AI agents that run as Tokio actors with built-in supervision, sessions, sandboxing, and tool use. write them together, and let them talk to LLMs.
 
-## What is this?
+## What??
 
 Each agent runs as its own async task with a bounded `mpsc` mailbox. Agents talk to each other through handles, call LLMs, and get restarted by a supervisor if they crash or stop responding. No shared mutable state.
-
-If you've used Erlang/OTP, this is that idea applied to LLM pipelines, in Rust.
 
 What you get out of the box:
 - `Runtime::builder()` -- one entry point, handles CLI and HTTP dispatch
@@ -290,7 +288,7 @@ max_agents = 100
 shutdown_timeout_secs = 30
 ```
 
-## How it fits together
+## Wire them together
 
 Each agent is two pieces:
 
