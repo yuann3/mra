@@ -74,14 +74,16 @@ Each agent picks its own model. The researcher and editor use Haiku (fast, cheap
 
 ## Install
 
-Add to your `Cargo.toml`:
+Run the following Cargo command in your project directory:
+
+```bash
+cargo add mra
+```
+
+Or add the following line to your Cargo.toml:
 
 ```toml
-[dependencies]
-mra = { git = "https://github.com/yuann3/mra" }
-
-# or with HTTP trigger support:
-mra = { git = "https://github.com/yuann3/mra", features = ["http"] }
+mra = "0.1.0"
 ```
 
 ## Runtime and triggers
@@ -191,7 +193,7 @@ let result = ctx.chat_with_tools(
         .system("You are a code reviewer with shell and read_file tools.")
         .user("review src/lib.rs")
         .tools(ctx.tools.specs())
-        .build(),
+        .build()
     15,  // max iterations
 ).await?;
 ```
