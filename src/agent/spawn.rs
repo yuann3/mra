@@ -167,11 +167,11 @@ impl<B: AgentBehavior> AgentSpawn<B> {
         self
     }
 
-    fn into_init(self) -> AgentInit<B> {
+    fn into_init(self) -> AgentInit {
         AgentInit {
             id: self.id,
             config: self.config,
-            behavior: self.behavior,
+            behavior: Box::new(self.behavior),
             peers: self.peers,
             llm: self.llm,
             cancel: self.cancel,
