@@ -200,7 +200,14 @@ impl AgentRunner {
     }
 }
 
-fn prepare_agent(init: AgentInit) -> (mpsc::Sender<AgentMessage>, Arc<MailboxSlot>, watch::Receiver<ProgressState>, AgentRunner) {
+fn prepare_agent(
+    init: AgentInit,
+) -> (
+    mpsc::Sender<AgentMessage>,
+    Arc<MailboxSlot>,
+    watch::Receiver<ProgressState>,
+    AgentRunner,
+) {
     let (sender, receiver) = mpsc::channel(init.config.mailbox_size);
     let mailbox = Arc::new(MailboxSlot::new(sender.clone()));
     let (progress_tx, progress_rx) = watch::channel(ProgressState::idle_now());
