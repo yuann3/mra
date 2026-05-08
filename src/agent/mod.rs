@@ -42,8 +42,8 @@ pub use spawn::AgentSpawn;
 /// the agent's mailbox.
 ///
 /// Uses native `async fn` in traits (RPITIT, Rust 1.75+). The runner
-/// is generic over `B: AgentBehavior` rather than using `dyn` dispatch,
-/// so there is no per-call heap allocation.
+/// dispatches via a blanket-impl'd object-safe wrapper so that a
+/// single event loop serves all spawn paths.
 ///
 /// # Examples
 ///
@@ -88,7 +88,7 @@ pub trait AgentBehavior: Send + 'static {
 ///
 /// Implemented automatically for all `AgentBehavior` types via a blanket impl.
 /// Provides a dyn-safe dispatch path so behaviors of different concrete types
-/// can be stored and invoked uniformly (e.g. in `AgentEntry` / `ErasedAgentRunner`).
+/// can be stored and invoked uniformly (e.g. in `AgentEntry` / `AgentRunner`).
 pub(crate) trait DynAgentBehavior: Send + 'static {
     fn handle_dyn<'a>(
         &'a mut self,

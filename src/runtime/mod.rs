@@ -49,7 +49,7 @@ use thiserror::Error;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
-use crate::agent::runner::ErasedAgentInit;
+use crate::agent::runner::AgentInit;
 use crate::agent::{AgentBehavior, AgentHandle, DynAgentBehavior, Task};
 use crate::budget::{AgentUsage, BudgetTracker, RunUsage};
 use crate::config::AgentConfig;
@@ -269,7 +269,7 @@ impl RuntimeBuilder {
                         )
                     })?;
 
-                    let child = AgentHandle::spawn_child_erased(ErasedAgentInit {
+                    let child = AgentHandle::spawn_child_with_init(AgentInit {
                         id: ctx.id,
                         config: cfg,
                         behavior,
