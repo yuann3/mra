@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use tokio::sync::watch;
 
+use std::future::Future;
+
 use serde_json::Value;
 
 use crate::budget::BudgetTracker;
@@ -134,19 +136,23 @@ impl AgentCtx {
         });
     }
 
-    /// Invokes a tool by name, sending heartbeats every second so the
-    /// supervisor doesn't mistake a long-running tool for a hung agent.
-    pub async fn call_tool(&self, name: &str, args: Value) -> Result<ToolOutput, ToolError> {
-        let invoke = self.tools.invoke(name, args);
-        tokio::pin!(invoke);
+    /// Awaits `fut` while sending heartbeats every second so the supervisor
+    /// doesn't mistake a long-running operation for a hung agent.
+    async fn with_heartbeat<F: Future>(&self, fut: F) -> F::Output {
+        tokio::pin!(fut);
         let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(1));
-
         loop {
             tokio::select! {
-                result = &mut invoke => break result,
+                result = &mut fut => break result,
                 _ = heartbeat.tick() => self.report_progress(),
             }
         }
+    }
+
+    /// Invokes a tool by name, sending heartbeats every second so the
+    /// supervisor doesn't mistake a long-running tool for a hung agent.
+    pub async fn call_tool(&self, name: &str, args: Value) -> Result<ToolOutput, ToolError> {
+        self.with_heartbeat(self.tools.invoke(name, args)).await
     }
 
     /// Call LLM with automatic budget enforcement and session history management.
@@ -196,16 +202,10 @@ impl AgentCtx {
         };
 
         let llm = self.llm.as_ref().ok_or(AgentError::LlmNotConfigured)?;
-        let chat_fut = llm.chat(&full_request);
-        tokio::pin!(chat_fut);
-        let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(1));
-
-        let response = loop {
-            tokio::select! {
-                result = &mut chat_fut => break result.map_err(AgentError::Llm)?,
-                _ = heartbeat.tick() => self.report_progress(),
-            }
-        };
+        let response = self
+            .with_heartbeat(llm.chat(&full_request))
+            .await
+            .map_err(AgentError::Llm)?;
 
         if let Some(ref budget) = self.budget {
             budget.charge(&self.name, response.total_tokens())?;
